@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<meta content="#080812" name="theme-color"/>
+<meta content="Fantzawya 3ama - Study, Compete, Conquer" name="description"/>
+<title>Fantzawya 3ama</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="style.css" rel="stylesheet"/>
+</head>
+<body>
+<!-- AUTHENTICATION -->
+<main class="auth-container" id="authContainer">
+<section class="auth-card">
+<div class="logo">F<span>3</span></div>
+<h1>FANTZAWYA 3AMA</h1>
+<p class="subtitle">STUDY • COMPETE • CONQUER</p>
+<div class="tabs">
+<button class="tab active" data-tab="login" type="button">LOGIN</button>
+<button class="tab" data-tab="register" type="button">REGISTER</button>
+</div>
+<form id="loginForm">
+<label for="loginEmail">Email Address</label>
+<input autocomplete="email" id="loginEmail" placeholder="Enter your email" required="" type="email"/>
+<label for="loginPassword">Password</label>
+<input autocomplete="current-password" id="loginPassword" placeholder="Enter your password" required="" type="password"/>
+<button class="submit-btn" type="submit">LOGIN</button>
+</form>
+<form hidden="" id="registerForm">
+<label for="registerUsername">Username</label>
+<input autocomplete="username" id="registerUsername" maxlength="20" minlength="3" placeholder="Choose a username" required="" type="text"/>
+<label for="registerEmail">Email Address</label>
+<input autocomplete="email" id="registerEmail" placeholder="Enter your email" required="" type="email"/>
+<label for="registerPassword">Password</label>
+<input autocomplete="new-password" id="registerPassword" minlength="6" placeholder="Create a password" required="" type="password"/>
+<button class="submit-btn" type="submit">CREATE ACCOUNT</button>
+</form>
+<p aria-live="polite" id="message" role="status"></p>
+<p class="footer-text">PRIVATE COMMUNITY • FANTZAWYA 3AMA</p>
+</section>
+</main>
+<!-- DASHBOARD -->
+<div class="dashboard" hidden="" id="dashboard">
+<aside class="sidebar">
+<a class="brand" href="#overview">
+<div class="brand-logo">F<span>3</span></div>
+<div><strong>FANTZAWYA</strong><small>3AMA COMMUNITY</small></div>
+</a>
+<div class="sidebar-label">MENU</div>
+<nav class="side-nav">
+<a class="nav-link active" data-page="overview" href="#overview"><span>⌂</span> Overview</a>
+<a class="nav-link" data-page="study" href="#study"><span>◴</span> Study Timer</a>
+<a class="nav-link" data-page="exams" href="#exams"><span>◷</span> Exam Countdown</a>
+<a class="nav-link" data-page="challenges" href="#challenges"><span>⚡</span> Challenges</a>
+<a class="nav-link" data-page="leaderboard" href="#leaderboard"><span>♛</span> Leaderboard</a>
+<a class="nav-link" data-page="friends" href="#friends"><span>♧</span> Friends</a>
+<a class="nav-link" data-page="league" href="#league"><span>🏆</span> League</a>
+<a class="nav-link" data-page="todo" href="#todo"><span>☑</span> To-do & Notes</a>
+<a class="nav-link" data-page="profile" href="#profile"><span>◉</span> My Profile</a>
+</nav>
+<div class="sidebar-bottom">
+<div class="sidebar-user">
+<div class="avatar" id="sidebarAvatar">U</div>
+<div class="user-details"><strong id="sidebarUsername">User</strong><small>Community Member</small></div>
+</div>
+<button class="logout-btn" id="logoutBtn">↪ <span>Logout</span></button>
+</div>
+</aside>
+<main class="main-content" id="overview">
+<header class="topbar">
+<div><p class="topbar-date">YOUR STUDY SPACE</p><h2>Dashboard</h2></div>
+<div class="topbar-user"><div class="online-dot"></div><span id="topbarUsername">User</span><div class="avatar small-avatar" id="topbarAvatar">U</div></div>
+</header>
+
+
+<!-- STUDY TIMER -->
+
+
+
+
+
+
+<section class="app-page active" data-page="overview" id="page-overview"><section class="welcome-card">
+<div class="welcome-content">
+<span class="welcome-tag">YOUR JOURNEY CONTINUES</span>
+<h1>Welcome back, <span id="welcomeUsername">User</span> 👋</h1>
+<p>Stay focused, keep learning, and make every day count.</p>
+</div>
+<div class="welcome-decoration">F3</div>
+</section><section class="stats-grid">
+<article class="stat-card">
+<div class="stat-top"><span class="stat-icon xp-icon">⚡</span><span class="stat-label">TOTAL XP</span></div>
+<h2 id="xpValue">0</h2><p>Your total experience points</p>
+</article>
+<article class="stat-card">
+<div class="stat-top"><span class="stat-icon streak-icon">🔥</span><span class="stat-label">STUDY STREAK</span></div>
+<h2><span id="streakValue">0</span> <small>days</small></h2><p>Keep your consistency alive</p>
+</article>
+<article class="stat-card">
+<div class="stat-top"><span class="stat-icon rank-icon">◴</span><span class="stat-label">STUDY TIME</span></div>
+<h2 id="totalStudyTime">0m</h2><p id="completedSessions">0 completed sessions</p>
+</article>
+</section></section><section class="app-page" data-page="study" id="page-study"><section class="study-timer-section" id="studyTimer">
+<div class="timer-heading">
+<div>
+<span class="section-kicker">FOCUS MODE</span>
+<h3>Study Timer</h3>
+<p>Choose your mode, focus, and save your completed study time.</p>
+</div>
+<span class="timer-heading-icon">◴</span>
+</div>
+<div class="timer-mode-switch">
+<button class="timer-mode-btn active" data-mode="countdown" id="countdownModeBtn" type="button">
+<span>◷</span><strong>Countdown</strong><small>Set a target duration</small>
+</button>
+<button class="timer-mode-btn" data-mode="stopwatch" id="stopwatchModeBtn" type="button">
+<span>⏱</span><strong>Stopwatch</strong><small>Count up without a limit</small>
+</button>
+</div>
+<div class="timer-setup" id="timerSetup">
+<label for="timerHours">Study duration</label>
+<div class="duration-inputs">
+<div><input id="timerHours" inputmode="numeric" max="24" min="0" type="number" value="1"/><small>HOURS</small></div>
+<span>:</span>
+<div><input id="timerMinutes" inputmode="numeric" max="59" min="0" type="number" value="0"/><small>MINUTES</small></div>
+<span>:</span>
+<div><input id="timerSeconds" inputmode="numeric" max="59" min="0" type="number" value="0"/><small>SECONDS</small></div>
+</div>
+<p class="timer-hint">Choose from 1 minute up to 24 hours.</p>
+</div>
+<div class="timer-clock-wrap">
+<div class="timer-progress" id="timerProgress">
+<div class="timer-clock">
+<span class="timer-state" id="timerState">READY TO FOCUS</span>
+<strong id="timerDisplay">01:00:00</strong>
+<span class="timer-mode-caption" id="timerModeCaption">COUNTDOWN SESSION</span>
+</div>
+</div>
+</div>
+<div class="timer-controls">
+<button class="timer-main-btn" id="timerStartBtn" type="button">▶ START STUDYING</button>
+<button class="timer-control-btn" hidden="" id="timerPauseBtn" type="button">Ⅱ PAUSE</button>
+<button class="timer-control-btn" hidden="" id="timerResumeBtn" type="button">▶ RESUME</button>
+<button class="timer-finish-btn" hidden="" id="timerFinishBtn" type="button">FINISH SESSION</button>
+<button class="timer-reset-btn" hidden="" id="timerResetBtn" type="button">RESET</button>
+</div>
+<p aria-live="polite" class="timer-message" id="timerMessage" role="status">Your completed sessions will be saved to your account.</p>
+</section></section><section class="app-page" data-page="exams" id="page-exams">
+<section class="community-section">
+ <div class="section-heading"><div><span class="section-kicker">STAY ON TRACK</span><h3>Exam Countdown</h3></div></div>
+ <article class="panel" style="max-width:760px">
+  <label for="examDate">Your exam date and time</label>
+  <input id="examDate" type="datetime-local" style="width:100%;margin:10px 0 14px;padding:13px;border-radius:10px;background:#101020;color:#fff;border:1px solid var(--border)">
+  <button class="community-action-btn" id="saveExamBtn" type="button">SAVE EXAM DATE</button>
+  <div class="stats-grid" style="margin-top:22px">
+   <article class="stat-card"><span class="stat-label">DAYS</span><h2 id="daysLeft">00</h2></article>
+   <article class="stat-card"><span class="stat-label">HOURS</span><h2 id="hoursLeft">00</h2></article>
+   <article class="stat-card"><span class="stat-label">MINUTES</span><h2 id="minutesLeft">00</h2></article>
+   <article class="stat-card"><span class="stat-label">SECONDS</span><h2 id="secondsLeft">00</h2></article>
+  </div>
+  <p id="examStatus" class="community-note" aria-live="polite">No exam date selected yet.</p>
+ </article>
+</section></section><section class="app-page" data-page="challenges" id="page-challenges"><section class="community-section" id="challenges">
+<div class="section-heading">
+<div><span class="section-kicker">PUSH YOUR LIMITS</span><h3>Study Challenges</h3></div>
+<span class="community-caption">COMPETE WITH YOURSELF</span>
+</div>
+<p class="community-description">Join a goal and your completed timer sessions will update its progress automatically.</p>
+<div class="challenge-grid" id="challengeGrid">
+<div class="community-loading">Loading challenges...</div>
+</div>
+</section></section><section class="app-page" data-page="leaderboard" id="page-leaderboard"><section class="community-section" id="leaderboard">
+<div class="section-heading">
+<div><span class="section-kicker">THE COMMUNITY</span><h3>All-time Leaderboard</h3></div>
+<span class="community-caption">SINCE ACCOUNT CREATION</span>
+</div>
+<p class="community-description">Ranked by all completed study time saved since each member joined.</p>
+<div class="leaderboard-panel">
+<div class="leaderboard-head"><span>RANK / MEMBER</span><span>STUDY TIME</span></div>
+<div id="leaderboardList"><div class="community-loading">Loading leaderboard...</div></div>
+</div>
+<p class="community-note">Only completed sessions count. Your username is visible to signed-in community members.</p>
+</section></section><section class="app-page" data-page="friends" id="page-friends"><section class="community-section" id="friends">
+<div class="section-heading">
+<div><span class="section-kicker">YOUR STUDY CIRCLE</span><h3>Friends</h3></div>
+<span class="community-caption">FIND • CONNECT • COMPETE</span>
+</div>
+<div class="friends-layout">
+<article class="panel friends-search-panel">
+<h4>Add a friend</h4>
+<p class="panel-description">Search by their exact Fantzawya username.</p>
+<div class="friend-search-row">
+<input id="friendUsernameInput" maxlength="20" placeholder="Enter username" type="text"/>
+<button class="community-action-btn" id="findFriendBtn" type="button">SEARCH</button>
+</div>
+<div aria-live="polite" class="friend-search-result" id="friendSearchResult"></div>
+</article>
+<article class="panel">
+<div class="panel-heading"><h4>Friend requests</h4><span class="panel-icon">✉</span></div>
+<div class="friends-list" id="friendRequestsList"><p class="community-loading">Loading requests...</p></div>
+</article>
+<article class="panel friends-list-panel">
+<div class="panel-heading"><h4>My friends</h4><span class="panel-icon">♧</span></div>
+<div class="friends-list" id="friendsList"><p class="community-loading">Loading friends...</p></div>
+</article>
+</div>
+<p class="community-note">Only your username and profile picture are searchable. Your email address is never shown to other members.</p>
+</section></section><section class="app-page" data-page="league" id="page-league">
+<section class="community-section">
+ <div class="section-heading"><div><span class="section-kicker">TEAM COMPETITION</span><h3>Study League</h3></div><span class="community-caption">CREATE • INVITE • COMPETE</span></div>
+ <div class="friends-layout">
+  <article class="panel"><h4>Create a league</h4><p class="panel-description">Start a private study league and invite your friends with a code.</p><label for="leagueNameInput">League name</label><input id="leagueNameInput" maxlength="32" placeholder="Example: Final Exams Squad"><button class="community-action-btn" id="createLeagueBtn" type="button">CREATE LEAGUE</button><p class="community-note" id="leagueCreateStatus"></p></article>
+  <article class="panel"><h4>Join with invite code</h4><p class="panel-description">Enter the code shared by your friend.</p><label for="leagueCodeInput">Invite code</label><input id="leagueCodeInput" maxlength="10" placeholder="AB12CD34" style="text-transform:uppercase"><button class="community-action-btn" id="joinLeagueBtn" type="button">JOIN LEAGUE</button><p class="community-note" id="leagueJoinStatus"></p></article>
+ </div>
+ <div class="panel" style="margin-top:18px"><div class="panel-heading"><h4>My leagues</h4></div><div id="myLeaguesList" class="friends-list">Your leagues will appear here.</div></div>
+ <div class="panel" style="margin-top:18px"><div class="panel-heading"><h4 id="activeLeagueTitle">League details</h4></div><p class="community-note" id="activeLeagueCode"></p><div class="friend-search-row"><input id="leagueTaskInput" maxlength="100" placeholder="Add a shared league task"><button class="community-action-btn" id="addLeagueTaskBtn" type="button">ADD TASK</button></div><div id="leagueTasksList" class="friends-list">Select a league to view its tasks.</div><div class="panel-heading" style="margin-top:20px"><h4>All-time league ranking</h4></div><div id="leagueRankingList" class="friends-list">Select a league to view its ranking.</div></div>
+ <p class="community-note">Study totals are calculated from completed sessions saved to your account. Client-side timers are not tamper-proof.</p>
+</section></section>
+<section class="app-page" data-page="todo" id="page-todo">
+<section class="community-section">
+ <div class="section-heading"><div><span class="section-kicker">PLAN YOUR SESSION</span><h3>My Notes & Checklist</h3></div><span class="community-caption">DON'T MISS A TASK</span></div>
+ <article class="panel" style="max-width:850px"><label for="todoTitleInput">Write a task</label><input id="todoTitleInput" maxlength="100" placeholder="What do you need to finish?"><label for="todoNoteInput">Extra note (optional)</label><textarea id="todoNoteInput" maxlength="1000" rows="3" placeholder="Add details or a quick note"></textarea><label for="todoDueInput">Reminder date & time (optional)</label><input id="todoDueInput" type="datetime-local"><button class="community-action-btn" id="addTodoBtn" type="button">ADD TASK</button><p id="todoStatus" class="community-note"></p></article>
+ <div class="panel" style="margin-top:18px"><div class="panel-heading"><h4>My tasks</h4><span class="panel-icon">☑</span></div><div id="todoList" class="friends-list">Loading your tasks...</div></div>
+</section></section>
+<section class="app-page" data-page="profile" id="page-profile">
+<section class="community-section">
+ <div class="section-heading"><div><span class="section-kicker">YOUR ACCOUNT</span><h3>My Profile</h3></div></div>
+ <div class="friends-layout">
+  <article class="panel profile-panel profile-glass-card">
+   <div class="profile-cover" id="profileCover"><span class="cover-label">YOUR COVER PHOTO</span></div>
+   <div class="profile-hero-content">
+   <div class="profile-avatar avatar" id="profileAvatar">U</div>
+   <h3 class="profile-name" id="profileUsername">User</h3>
+   <p class="profile-email" id="profileEmail">email</p>
+   <span class="profile-badge">COMMUNITY MEMBER</span>
+   <div class="profile-info"><div><span>Total XP</span><strong id="profileXP">0 XP</strong></div></div>
+   <div class="stats-grid profile-study-stats" style="margin-top:22px">
+    <article class="stat-card"><span class="stat-label">TOTAL STUDY TIME</span><h2 id="profileStudyTime">0s</h2></article>
+    <article class="stat-card"><span class="stat-label">⏳ COUNTDOWN</span><h2 id="profileCountdownTime">0s</h2></article>
+    <article class="stat-card"><span class="stat-label">⏱ STOPWATCH</span><h2 id="profileStopwatchTime">0s</h2></article>
+   </div>
+   <p class="community-note" style="text-align:center"><span id="profileSessionCount">0</span> completed sessions</p>
+   <div style="display:flex;justify-content:center;margin-top:14px"><button class="community-action-btn danger-action" id="resetStudyStatsBtn" type="button">↻ RESET STUDY TIME</button></div>
+   <p class="community-note" id="resetStudyStatsStatus" style="text-align:center">Reset removes your completed study sessions and updates your rankings.</p>
+   </div>
+   <div class="profile-edit">
+    <h4>Customize your profile</h4>
+    <label for="editUsername">Username</label>
+    <input id="editUsername" maxlength="20" minlength="3" type="text" placeholder="Your username">
+    <label for="editAvatarUrl">Profile photo URL</label>
+    <input id="editAvatarUrl" type="url" placeholder="https://example.com/photo.jpg">
+    <p class="profile-edit-hint">Paste a direct image link (JPG, PNG, WEBP). The image host must allow public viewing.</p>
+    <label for="editCoverUrl">Profile cover photo URL</label>
+    <input id="editCoverUrl" type="url" placeholder="https://example.com/cover.jpg">
+    <p class="profile-edit-hint">This is the wide banner behind your profile photo, like Facebook. Use a direct image URL.</p>
+    <button class="community-action-btn" id="saveProfileBtn" type="button">SAVE PROFILE</button>
+    <p id="profileStatus" class="community-note" aria-live="polite"></p>
+   </div>
+  </article>
+  <article class="panel account-security">
+   <h4>Change email</h4>
+   <label for="newEmail">New email</label><input id="newEmail" type="email" placeholder="new@email.com">
+   <label for="emailCurrentPassword">Current password</label><input id="emailCurrentPassword" type="password" placeholder="Current password">
+   <button class="community-action-btn" id="changeEmailBtn" type="button">UPDATE EMAIL</button>
+   <p id="emailStatus" class="community-note" aria-live="polite"></p>
+   <div class="account-security">
+    <h4>Change password</h4>
+    <label for="currentPassword">Current password</label><input id="currentPassword" type="password">
+    <label for="newPassword">New password</label><input id="newPassword" type="password">
+    <label for="confirmNewPassword">Confirm new password</label><input id="confirmNewPassword" type="password">
+    <button class="community-action-btn" id="changePasswordBtn" type="button">CHANGE PASSWORD</button>
+    <p id="passwordStatus" class="community-note" aria-live="polite"></p>
+   </div>
+  </article>
+ </div>
+</section></section><footer class="dashboard-footer">FANTZAWYA 3AMA <span>•</span> STUDY • COMPETE • CONQUER</footer></main>
+</div>
+<nav class="mobile-nav" hidden="" id="mobileNav"><a class="mobile-nav-link active" data-page="overview" href="#overview"><span>⌂</span><small>Home</small></a><a class="mobile-nav-link" data-page="study" href="#study"><span>◴</span><small>Study</small></a><a class="mobile-nav-link" data-page="challenges" href="#challenges"><span>⚡</span><small>Challenges</small></a><a class="mobile-nav-link" data-page="leaderboard" href="#leaderboard"><span>♛</span><small>Ranks</small></a><a class="mobile-nav-link" data-page="friends" href="#friends"><span>♧</span><small>Friends</small></a><a class="mobile-nav-link" data-page="league" href="#league"><span>🏆</span><small>League</small></a><a class="mobile-nav-link" data-page="todo" href="#todo"><span>☑</span><small>Tasks</small></a><a class="mobile-nav-link" data-page="profile" href="#profile"><span>◉</span><small>Profile</small></a><button class="mobile-nav-link" id="mobileLogoutBtn" type="button"><span>↪</span><small>Logout</small></button></nav>
+<script src="app.js" type="module"></script>
+</body>
+</html>
