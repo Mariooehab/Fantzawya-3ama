@@ -1,4 +1,5 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onDocumentUpdated } = require('firebase-functions/v2/firestore');
 const { defineSecret } = require('firebase-functions/params');
 const logger = require('firebase-functions/logger');
 const { initializeApp } = require('firebase-admin/app');
@@ -6,6 +7,45 @@ const { getFirestore, Timestamp } = require('firebase-admin/firestore');
 initializeApp();
 const adminDb = getFirestore();
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
+
+exports.recordCompletedStudyRoom = onDocumentUpdated({
+  document: 'studyRooms/{roomId}',
+  region: 'us-central1',
+  retry: true
+}, async (event) => {
+  const previousRoom = event.data?.before.data();
+  const room = event.data?.after.data();
+  if (!previousRoom || !room || previousRoom.status === 'completed' || room.status !== 'completed') return;
+
+  if (!Number.isSafeInteger(room.finalSeconds) || room.finalSeconds < 0) {
+    throw new Error(`Completed study room ${event.params.roomId} has invalid finalSeconds.`);
+  }
+  if (!Array.isArray(room.memberUids) || room.memberUids.length === 0 || room.memberUids.some(uid => typeof uid !== 'string')) {
+    throw new Error(`Completed study room ${event.params.roomId} has invalid memberUids.`);
+  }
+  if (!['stopwatch', 'countdown', 'until'].includes(room.mode)) {
+    throw new Error(`Completed study room ${event.params.roomId} has invalid mode.`);
+  }
+
+  const memberUids = [...new Set(room.memberUids)];
+  if (!memberUids.includes(room.ownerUid)) {
+    throw new Error(`Completed study room ${event.params.roomId} is missing its owner from memberUids.`);
+  }
+  const completedAt = room.endedAt || event.data.after.updateTime;
+  for (let i = 0; i < memberUids.length; i += 400) {
+    const batch = adminDb.batch();
+    memberUids.slice(i, i + 400).forEach(uid => {
+      batch.set(adminDb.collection('studyRoomCompletions').doc(`${event.params.roomId}_${uid}`), {
+        roomId: event.params.roomId,
+        uid,
+        durationSeconds: room.finalSeconds,
+        mode: room.mode,
+        completedAt
+      });
+    });
+    await batch.commit();
+  }
+});
 
 exports.askFantzawyaAI = onCall({
   region: 'us-central1',

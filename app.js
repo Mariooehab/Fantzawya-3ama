@@ -24,7 +24,10 @@ import {
     updateDoc,
     deleteDoc,
     addDoc,
-    orderBy
+    orderBy,
+    onSnapshot,
+    arrayUnion,
+    arrayRemove
 } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 
 
@@ -49,7 +52,7 @@ function showPage(pageName) {
     const selected = validPages.includes(pageName) ? pageName : "overview";
     document.querySelectorAll(".app-page").forEach(page => page.classList.toggle("active", page.dataset.page === selected));
     document.querySelectorAll("[data-page]").forEach(link => link.classList.toggle("active", link.dataset.page === selected));
-    const titles = { overview: "Dashboard", study: "Study Timer", exams: "Exam Countdown", challenges: "Study Challenges", leaderboard: "All-time Leaderboard", friends: "Friends", league: "Study League", todo: "To-do & Notes", profile: "My Profile" };
+    const titles = { overview: "Dashboard", study: "Study Timer", exams: "Exam Countdown", challenges: "Study Session", leaderboard: "All-time Leaderboard", friends: "Friends", league: "Study League", todo: "To-do & Notes", profile: "My Profile" };
     const heading = document.querySelector(".topbar h2");
     if (heading) heading.textContent = titles[selected];
     if (history.replaceState) history.replaceState(null, "", `#${selected}`);
@@ -1366,24 +1369,31 @@ if (resetStudyStatsBtn) {
     resetStudyStatsBtn.addEventListener("click", async () => {
         const user = auth.currentUser;
         if (!user || resetStudyStatsBtn.disabled) return;
-        const confirmed = await appConfirm("Are you sure you want to reset all your study statistics? This will permanently delete your completed Countdown and Stopwatch sessions and cannot be undone.");
+        const confirmed = await appConfirm("Are you sure you want to reset all your study statistics? This will permanently delete your completed Countdown, Stopwatch, and Study Session records and cannot be undone.");
         if (!confirmed) return;
 
         resetStudyStatsBtn.disabled = true;
         const originalText = resetStudyStatsBtn.textContent;
         resetStudyStatsBtn.textContent = "RESETTING...";
         try {
-            const sessionsSnapshot = await getDocs(query(
-                collection(db, "studySessions"),
-                where("uid", "==", user.uid)
-            ));
+            const [sessionsSnapshot, roomSessionsSnapshot] = await Promise.all([
+                getDocs(query(
+                    collection(db, "studySessions"),
+                    where("uid", "==", user.uid)
+                )),
+                getDocs(query(
+                    collection(db, "studyRoomCompletions"),
+                    where("uid", "==", user.uid)
+                ))
+            ]);
             const completedSessions = sessionsSnapshot.docs.filter(item => item.data().status === "completed");
-            for (const sessionDoc of completedSessions) {
-                await deleteDoc(sessionDoc.ref);
-            }
+            await Promise.all([
+                ...completedSessions.map(sessionDoc => deleteDoc(sessionDoc.ref)),
+                ...roomSessionsSnapshot.docs.map(sessionDoc => deleteDoc(sessionDoc.ref))
+            ]);
             await loadStudyStats(user.uid);
             await loadCommunityFeatures(user.uid);
-            appAlert(`Study statistics reset successfully. ${completedSessions.length} completed sessions cleared.`);
+            appAlert(`Study statistics reset successfully. ${completedSessions.length} timer sessions and ${roomSessionsSnapshot.size} Study Sessions cleared.`);
         } catch (error) {
             console.error("Could not reset study statistics:", error);
             appAlert(`Could not reset study statistics: ${error.message || error}`);
@@ -1401,11 +1411,18 @@ async function loadStudyStats(uid) {
             collection(db, "studySessions"),
             where("uid", "==", uid)
         );
-        const snapshot = await getDocs(sessionsQuery);
+        const [snapshot, roomSessionsSnapshot] = await Promise.all([
+            getDocs(sessionsQuery),
+            getDocs(query(
+                collection(db, "studyRoomCompletions"),
+                where("uid", "==", uid)
+            ))
+        ]);
 
         let totalSeconds = 0;
         let countdownSeconds = 0;
         let stopwatchSeconds = 0;
+        let studySessionSeconds = 0;
         let completedCount = 0;
 
         snapshot.forEach(sessionDoc => {
@@ -1419,6 +1436,13 @@ async function loadStudyStats(uid) {
             }
         });
 
+        roomSessionsSnapshot.forEach(roomSessionDoc => {
+            const seconds = Math.max(0, Number(roomSessionDoc.data().durationSeconds) || 0);
+            studySessionSeconds += seconds;
+            totalSeconds += seconds;
+            completedCount++;
+        });
+
         const formatted = formatStudyTotal(totalSeconds);
 
         // Update only elements that actually exist on the current page.
@@ -1428,6 +1452,7 @@ async function loadStudyStats(uid) {
         const profileSessionCountEl = document.getElementById("profileSessionCount");
         const profileCountdownTimeEl = document.getElementById("profileCountdownTime");
         const profileStopwatchTimeEl = document.getElementById("profileStopwatchTime");
+        const profileStudySessionTimeEl = document.getElementById("profileStudySessionTime");
 
         if (totalStudyTimeEl) totalStudyTimeEl.textContent = formatted;
         if (completedSessionsEl) completedSessionsEl.textContent = `${completedCount} completed sessions`;
@@ -1435,6 +1460,7 @@ async function loadStudyStats(uid) {
         if (profileSessionCountEl) profileSessionCountEl.textContent = completedCount;
         if (profileCountdownTimeEl) profileCountdownTimeEl.textContent = formatStudyTotal(countdownSeconds);
         if (profileStopwatchTimeEl) profileStopwatchTimeEl.textContent = formatStudyTotal(stopwatchSeconds);
+        if (profileStudySessionTimeEl) profileStudySessionTimeEl.textContent = formatStudyTotal(studySessionSeconds);
     } catch (error) {
         console.error("Could not load study statistics:", {
             code: error.code || "unknown",
@@ -1447,6 +1473,367 @@ async function loadStudyStats(uid) {
     }
 }
 
+
+/* REAL-TIME SHARED STUDY ROOMS */
+let studyRoomUnsubscribe = null;
+let studyInviteUnsubscribe = null;
+let activeStudyRoomUnsubscribe = null;
+let studyRoomStatsUnsubscribe = null;
+let activeStudyRoomId = null;
+let activeStudyRoomData = null;
+let studyRoomTicker = null;
+let studyFriendsCache = [];
+
+function studyFormatClock(totalSeconds) {
+    const seconds = Math.max(0, Math.floor(totalSeconds || 0));
+    const h = String(Math.floor(seconds / 3600)).padStart(2, "0");
+    const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+    const sec = String(seconds % 60).padStart(2, "0");
+    return `${h}:${m}:${sec}`;
+}
+function studyRoomTimestampMillis(value) {
+    if (!value) return 0;
+    if (typeof value.toMillis === "function") return value.toMillis();
+    if (typeof value.toDate === "function") return value.toDate().getTime();
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+function studyRoomRemaining(room) {
+    // Firestore serverTimestamp can briefly be unresolved in a local snapshot.
+    // Never interpret a missing start timestamp as an already-finished session.
+    const started = studyRoomTimestampMillis(room?.startedAt);
+    if (!started) return null;
+    const now = Date.now();
+    if (room.mode === "stopwatch") return Math.max(0, Math.floor((now - started) / 1000));
+    const configuredEnd = studyRoomTimestampMillis(room.targetEndAt);
+    const end = configuredEnd || (room.mode === "countdown" ? started + (Number(room.durationSeconds) || 0) * 1000 : 0);
+    if (!end) return null;
+    return Math.max(0, Math.ceil((end - now) / 1000));
+}
+async function loadStudyFriends(uid) {
+    const select = document.getElementById("studyRoomFriends");
+    if (!select) return;
+    try {
+        const [a, b] = await Promise.all([
+            getDocs(query(collection(db, "friendRequests"), where("senderUid", "==", uid), where("status", "==", "accepted"))),
+            getDocs(query(collection(db, "friendRequests"), where("recipientUid", "==", uid), where("status", "==", "accepted")))
+        ]);
+        const ids = [...new Set([...a.docs, ...b.docs].map(d => d.data().senderUid === uid ? d.data().recipientUid : d.data().senderUid))];
+        const profiles = await Promise.all(ids.map(id => getDoc(doc(db, "publicProfiles", id))));
+        studyFriendsCache = profiles.filter(x => x.exists()).map(x => ({ uid: x.id, ...x.data() }));
+        select.replaceChildren();
+        if (!studyFriendsCache.length) { const option=document.createElement("option"); option.disabled=true; option.textContent="Add friends first to invite them"; select.append(option); return; }
+        studyFriendsCache.forEach(friend => { const option=document.createElement("option"); option.value=friend.uid; option.textContent=`${friend.username || "Friend"} (@${friend.username || "member"})`; select.append(option); });
+    } catch (error) { console.error("Study friends load failed", error); select.innerHTML="<option disabled>Could not load friends</option>"; }
+}
+async function initStudyRooms(uid) {
+    await loadStudyFriends(uid);
+    if (studyRoomUnsubscribe) studyRoomUnsubscribe();
+    if (studyInviteUnsubscribe) studyInviteUnsubscribe();
+    if (studyRoomStatsUnsubscribe) studyRoomStatsUnsubscribe();
+    studyRoomStatsUnsubscribe = onSnapshot(query(
+        collection(db, "studyRoomCompletions"),
+        where("uid", "==", uid)
+    ), () => {
+        loadStudyStats(uid);
+    }, error => console.error("Study Session stats sync failed:", error));
+    studyRoomUnsubscribe = onSnapshot(query(collection(db, "studyRooms"), where("memberUids", "array-contains", uid)), snap => {
+        const list = document.getElementById("myStudyRoomsList"); if (!list) return;
+        list.replaceChildren();
+        if (snap.empty) { list.textContent = "No study rooms yet. Create one or accept an invitation."; return; }
+        snap.docs.sort((a,b) => (b.data().createdAt?.seconds || 0) - (a.data().createdAt?.seconds || 0)).forEach(item => {
+            const d=item.data(), row=document.createElement("button"); row.type="button"; row.className="study-room-row";
+            const info=document.createElement("span"); info.className="study-room-row-info";
+            const name=document.createElement("strong"); name.textContent=d.name || "Study room";
+            const meta=document.createElement("small"); meta.textContent=`${(d.memberUids||[]).length} members • ${d.status === "active" ? "Session live" : d.status === "completed" ? "Finished" : "Waiting to start"}`;
+            info.append(name,meta); const status=document.createElement("span"); status.className=`study-room-pill ${d.status || "waiting"}`; status.textContent=d.status === "active" ? "LIVE" : d.status === "completed" ? "DONE" : "WAITING"; row.append(info,status); row.addEventListener("click",()=>openStudyRoom(item.id));
+            const actions=document.createElement("div"); actions.className="study-room-list-actions";
+            if(d.status === "completed" && d.ownerUid === uid){const del=document.createElement("button");del.type="button";del.className="mini-action danger-action";del.textContent="DELETE";del.addEventListener("click",async e=>{e.stopPropagation();if(!confirm("Delete this completed study room?"))return;try{await deleteDoc(doc(db,"studyRooms",item.id));if(activeStudyRoomId===item.id)closeActiveStudyRoom();}catch(err){appAlert(`Could not delete room: ${err.message||err.code}`);}});actions.append(del);}
+            else if(d.ownerUid !== uid){const leave=document.createElement("button");leave.type="button";leave.className="mini-action";leave.textContent="LEAVE";leave.addEventListener("click",async e=>{e.stopPropagation();if(!confirm("Leave this study room?"))return;try{await updateDoc(doc(db,"studyRooms",item.id),{memberUids:arrayRemove(uid)});if(activeStudyRoomId===item.id)closeActiveStudyRoom();}catch(err){appAlert(`Could not leave room: ${err.message||err.code}`);}});actions.append(leave);}
+            row.append(actions); list.append(row);
+        });
+        if (!activeStudyRoomId && snap.docs.length) openStudyRoom(snap.docs[0].id);
+    }, error => { console.error(error); document.getElementById("myStudyRoomsList").textContent="Could not load rooms. Check Firestore Rules."; });
+    studyInviteUnsubscribe = onSnapshot(query(collection(db, "studyRoomInvites"), where("recipientUid", "==", uid), where("status", "==", "pending")), snap => {
+        const list=document.getElementById("studyInvitesList"), count=document.getElementById("studyInviteCount"); if(!list)return;
+        count.textContent=String(snap.size); list.replaceChildren();
+        if(snap.empty){list.textContent="No new study invitations.";return;}
+        snap.forEach(item=>{const d=item.data(),row=document.createElement("div");row.className="study-invite-row";const details=document.createElement("div");const title=document.createElement("strong");title.textContent=`${d.senderUsername || "A friend"} invited you`;const sub=document.createElement("small");sub.textContent=`${d.roomName || "Study room"} • ${d.mode || "stopwatch"}`;details.append(title,sub);const actions=document.createElement("div");actions.className="study-invite-actions";const accept=document.createElement("button");accept.className="mini-action accept";accept.textContent="JOIN";accept.addEventListener("click",()=>respondStudyInvite(item.id,d.roomId,true));const decline=document.createElement("button");decline.className="mini-action";decline.textContent="DECLINE";decline.addEventListener("click",()=>respondStudyInvite(item.id,d.roomId,false));actions.append(accept,decline);row.append(details,actions);list.append(row);});
+    }, error=>{console.error(error);document.getElementById("studyInvitesList").textContent="Could not load invitations.";});
+}
+const studyModeSelect=document.getElementById("studyRoomMode");
+if(studyModeSelect) studyModeSelect.addEventListener("change",()=>{document.getElementById("studyCountdownFields").hidden=studyModeSelect.value!=="countdown";document.getElementById("studyUntilFields").hidden=studyModeSelect.value!=="until";});
+const createStudyRoomBtn=document.getElementById("createStudyRoomBtn");
+if(createStudyRoomBtn) createStudyRoomBtn.addEventListener("click",createStudyRoom);
+async function createStudyRoom(){
+    const user=auth.currentUser, status=document.getElementById("studyRoomCreateStatus"), btn=createStudyRoomBtn;
+    const name=document.getElementById("studyRoomName").value.trim() || "Group Study Session";
+    const mode=document.getElementById("studyRoomMode").value;
+    const selected=[...document.getElementById("studyRoomFriends").selectedOptions].map(o=>o.value).filter(Boolean);
+    let durationSeconds=0,targetEndAt="";
+    if(mode==="countdown"){durationSeconds=Math.min(86400,Math.max(60,Number(document.getElementById("studyRoomMinutes").value||0)*60));if(!durationSeconds){status.textContent="Enter a valid duration.";return;}}
+    if(mode==="until"){const value=document.getElementById("studyRoomEndAt").value;if(!value||new Date(value)<=new Date()){status.textContent="Choose an end time in the future.";return;}targetEndAt=new Date(value).toISOString();}
+    btn.disabled=true; status.textContent="Creating your room...";
+    try{
+        const roomRef=doc(collection(db,"studyRooms"));
+        const room={name,ownerUid:user.uid,ownerUsername:currentProfile?.username||"Member",memberUids:[user.uid],mode,durationSeconds,targetEndAt,status:"waiting",createdAt:serverTimestamp(),startedAt:null,endedAt:null};
+        await setDoc(roomRef,room);
+        const inviteWrites=selected.map(friendUid=>{const friend=studyFriendsCache.find(f=>f.uid===friendUid);return setDoc(doc(db,"studyRoomInvites",`${roomRef.id}_${friendUid}`),{roomId:roomRef.id,roomName:name,mode,senderUid:user.uid,senderUsername:currentProfile?.username||"Member",recipientUid:friendUid,status:"pending",createdAt:serverTimestamp()});});
+        await Promise.all(inviteWrites);
+        document.getElementById("studyRoomName").value="";status.textContent=`Room created${selected.length?` and ${selected.length} invitation(s) sent`:""}.`;await openStudyRoom(roomRef.id);
+    }catch(error){console.error(error);status.textContent=`Could not create room: ${error.message||error.code}`;}
+    finally{btn.disabled=false;}
+}
+async function respondStudyInvite(inviteId,roomId,accept){
+    try{const inviteRef=doc(db,"studyRoomInvites",inviteId);await updateDoc(inviteRef,{status:accept?"accepted":"declined",respondedAt:serverTimestamp()});if(accept){await updateDoc(doc(db,"studyRooms",roomId),{memberUids:arrayUnion(auth.currentUser.uid)});await openStudyRoom(roomId);}}
+    catch(error){console.error(error);appAlert(`Could not ${accept?"join":"decline"} invitation: ${error.message||error.code}`);}
+}
+async function openStudyRoom(roomId){
+    if(activeStudyRoomUnsubscribe)activeStudyRoomUnsubscribe();activeStudyRoomId=roomId;
+    const panel=document.getElementById("studyRoomLivePanel");panel.hidden=false;document.getElementById("studyLiveRoomTitle").textContent="Loading room...";
+    activeStudyRoomUnsubscribe=onSnapshot(doc(db,"studyRooms",roomId),snap=>{if(!snap.exists()){panel.hidden=true;return;}activeStudyRoomData={id:snap.id,...snap.data()};renderStudyRoom();},error=>{console.error(error);document.getElementById("studyLiveNotice").textContent="Could not sync this room.";});
+    if(!studyRoomTicker)studyRoomTicker=setInterval(tickStudyRoom,1000);
+}
+function renderStudyRoom(){
+    const r=activeStudyRoomData;if(!r)return;const owner=r.ownerUid===auth.currentUser?.uid;
+    document.getElementById("studyLiveRoomTitle").textContent=r.name||"Study Session";
+    document.getElementById("studyLiveRoomMembers").textContent=`${(r.memberUids||[]).length} participant(s) • Hosted by ${r.ownerUsername||"Member"}`;
+    document.getElementById("studyLiveStatus").textContent=r.status==="active"?"LIVE":r.status==="completed"?"COMPLETED":"WAITING";
+    document.getElementById("studyLiveModeLabel").textContent=r.mode==="stopwatch"?"STOPWATCH":r.mode==="until"?"UNTIL END TIME":"COUNTDOWN";
+    document.getElementById("studyHostControls").hidden=!owner;
+    document.getElementById("studyHostStartBtn").hidden=!owner||r.status!=="waiting";
+    document.getElementById("studyHostStopBtn").hidden=!owner||r.status!=="active";
+    const leaveBtn=document.getElementById("studyLeaveRoomBtn"); if(leaveBtn) leaveBtn.hidden=owner;
+    const deleteBtn=document.getElementById("studyDeleteRoomBtn"); if(deleteBtn) deleteBtn.hidden=!(owner&&r.status==="completed");
+    document.getElementById("studyLiveNotice").textContent=owner?"You are the host. Only you can start or end this shared timer.":"The host controls the timer. Your clock stays synchronized with the room.";
+    const participants=document.getElementById("studyLiveParticipants");participants.replaceChildren();(r.memberUids||[]).forEach(uid=>{const row=document.createElement("span");row.className="study-participant-chip";row.textContent=uid===r.ownerUid?`${r.ownerUsername||"Host"} · HOST`:uid===auth.currentUser?.uid?`${currentProfile?.username||"You"} · YOU`:"Member";participants.append(row);});
+    tickStudyRoom();
+}
+function tickStudyRoom(){
+    const r=activeStudyRoomData;if(!r)return;const clock=document.getElementById("studyLiveClock"),sub=document.getElementById("studyLiveSubtext");
+    if(r.status==="waiting"){clock.textContent=r.mode==="countdown"?studyFormatClock(r.durationSeconds):"00:00:00";sub.textContent="Waiting for the host to start";return;}
+    if(r.status==="completed"){clock.textContent=r.mode==="stopwatch"?studyFormatClock(r.finalSeconds||0):"00:00:00";sub.textContent="This study session has ended";return;}
+    const value=studyRoomRemaining(r);
+    if(value===null){clock.textContent="--:--:--";sub.textContent="Synchronizing session start…";return;}
+    clock.textContent=studyFormatClock(value);sub.textContent=r.mode==="stopwatch"?"Elapsed study time":`Time remaining${r.targetEndAt?` • ends ${new Date(r.targetEndAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}`:""}`;
+    if(r.mode!=="stopwatch"&&value<=0&&r.ownerUid===auth.currentUser?.uid)endStudyRoom(true);
+}
+const startStudyHostBtn=document.getElementById("studyHostStartBtn");
+if(startStudyHostBtn)startStudyHostBtn.addEventListener("click",async()=>{
+    if(!activeStudyRoomData||activeStudyRoomData.ownerUid!==auth.currentUser?.uid)return;
+    try{
+        const now=new Date();
+        let end="";
+        if(activeStudyRoomData.mode==="until"){
+            end=activeStudyRoomData.targetEndAt;
+            const endMillis=studyRoomTimestampMillis(end);
+            if(!endMillis||endMillis<=now.getTime()){
+                appAlert("The selected end time has already passed. Create a new room and choose a future date and time.");
+                return;
+            }
+        } else if(activeStudyRoomData.mode==="countdown") {
+            const duration=Math.max(60,Number(activeStudyRoomData.durationSeconds)||0);
+            end=new Date(now.getTime()+duration*1000).toISOString();
+        }
+        await updateDoc(doc(db,"studyRooms",activeStudyRoomId),{status:"active",startedAt:serverTimestamp(),targetEndAt:end});
+    }catch(e){appAlert(e.message||"Could not start session.");}
+});
+const stopStudyHostBtn=document.getElementById("studyHostStopBtn");
+if(stopStudyHostBtn)stopStudyHostBtn.addEventListener("click",()=>endStudyRoom(false));
+async function endStudyRoom(auto){
+    const r=activeStudyRoomData;
+    if(!r||r.ownerUid!==auth.currentUser?.uid||r.status!=="active")return;
+    const started=studyRoomTimestampMillis(r.startedAt);
+    const remaining=studyRoomRemaining(r);
+    // Guard against ending while Firestore is still resolving serverTimestamp.
+    if(!started||remaining===null)return;
+    try{
+        const elapsed=Math.max(0,Math.floor((Date.now()-started)/1000));
+        const finalSeconds=r.mode==="stopwatch"?elapsed:r.mode==="countdown"?Math.max(0,Number(r.durationSeconds)||0)-remaining:Math.max(0,Math.floor((studyRoomTimestampMillis(r.targetEndAt)-started)/1000));
+        await updateDoc(doc(db,"studyRooms",activeStudyRoomId),{status:"completed",endedAt:serverTimestamp(),finalSeconds,autoEnded:!!auto});
+    }catch(e){console.error(e);if(!auto)appAlert(e.message||"Could not end session.");}
+}
+
+
+function closeActiveStudyRoom(){
+    if(activeStudyRoomUnsubscribe) activeStudyRoomUnsubscribe();
+    activeStudyRoomUnsubscribe=null; activeStudyRoomId=null; activeStudyRoomData=null;
+    const panel=document.getElementById("studyRoomLivePanel"); if(panel) panel.hidden=true;
+}
+const leaveStudyRoomBtn=document.getElementById("studyLeaveRoomBtn");
+if(leaveStudyRoomBtn) leaveStudyRoomBtn.addEventListener("click",async()=>{
+    const r=activeStudyRoomData, uid=auth.currentUser?.uid;
+    if(!r||!uid||r.ownerUid===uid)return;
+    if(!confirm("Leave this study room?"))return;
+    try{await updateDoc(doc(db,"studyRooms",r.id),{memberUids:arrayRemove(uid)});closeActiveStudyRoom();}
+    catch(e){appAlert(`Could not leave room: ${e.message||e.code}`);}
+});
+const deleteStudyRoomBtn=document.getElementById("studyDeleteRoomBtn");
+if(deleteStudyRoomBtn) deleteStudyRoomBtn.addEventListener("click",async()=>{
+    const r=activeStudyRoomData, uid=auth.currentUser?.uid;
+    if(!r||r.ownerUid!==uid||r.status!=="completed")return;
+    if(!confirm("Permanently delete this completed study room?"))return;
+    try{await deleteDoc(doc(db,"studyRooms",r.id));closeActiveStudyRoom();}
+    catch(e){appAlert(`Could not delete room: ${e.message||e.code}`);}
+});
+
+
+const studyFullscreenBtn = document.getElementById("studyFullscreenBtn");
+const studyClockPanel = document.getElementById("studyClockPanel");
+const studyFullscreenExitBtn = document.getElementById("studyFullscreenExitBtn");
+const timerFullscreenBtn = document.getElementById("timerExpandBtn");
+const timerFullscreenExitBtn = document.getElementById("timerFullscreenExitBtn");
+const studyTimerSection = document.getElementById("studyTimer");
+let screenWakeLock = null;
+
+function isClockFullscreen() {
+    return document.fullscreenElement === studyTimerSection ||
+        document.fullscreenElement === studyClockPanel;
+}
+
+function showFullscreenNotice(text, error = false) {
+    if (document.fullscreenElement === studyTimerSection) {
+        setTimerMessage(text, error);
+        return;
+    }
+
+    const notice = document.getElementById("studyLiveNotice");
+    if (notice) {
+        notice.textContent = text;
+        notice.classList.toggle("error", error);
+    }
+}
+
+async function lockClockOrientation() {
+    if (!window.matchMedia("(pointer: coarse)").matches) return;
+    if (typeof screen.orientation?.lock !== "function") {
+        showFullscreenNotice("Rotate your phone to landscape for the best view.");
+        return;
+    }
+
+    try {
+        await screen.orientation.lock("landscape");
+    } catch (error) {
+        console.warn("Could not lock the phone to landscape:", error);
+        showFullscreenNotice("Rotate your phone to landscape for the best view.");
+    }
+}
+
+async function keepScreenAwake() {
+    if (!window.matchMedia("(pointer: coarse)").matches) return;
+    if (!navigator.wakeLock) {
+        showFullscreenNotice("This browser cannot keep the screen awake. Check its screen timeout settings.");
+        return;
+    }
+    if (screenWakeLock && !screenWakeLock.released) return;
+
+    try {
+        const wakeLock = await navigator.wakeLock.request("screen");
+        screenWakeLock = wakeLock;
+        wakeLock.addEventListener("release", () => {
+            if (screenWakeLock === wakeLock) screenWakeLock = null;
+        });
+    } catch (error) {
+        console.warn("Could not keep the phone screen awake:", error);
+        showFullscreenNotice("Your browser could not keep the screen awake. Check its screen timeout settings.", true);
+    }
+}
+
+function releaseScreenWakeLock() {
+    if (!screenWakeLock) return;
+    const wakeLock = screenWakeLock;
+    screenWakeLock = null;
+    wakeLock.release().catch(error => {
+        console.warn("Could not release the screen wake lock:", error);
+    });
+}
+
+async function setFullscreen(element, shouldEnter, errorMessage) {
+    try {
+        if (shouldEnter && document.fullscreenElement && document.fullscreenElement !== element) {
+            await document.exitFullscreen();
+        }
+        if (shouldEnter && document.fullscreenElement !== element) {
+            await element.requestFullscreen();
+            if (element === studyTimerSection || element === studyClockPanel) {
+                await lockClockOrientation();
+            }
+        } else if (!shouldEnter && document.fullscreenElement === element) {
+            await document.exitFullscreen();
+        }
+    } catch (error) {
+        console.error(errorMessage, error);
+        if (element === studyTimerSection) {
+            setTimerMessage(errorMessage, true);
+        } else {
+            const notice = document.getElementById("studyLiveNotice");
+            if (notice) notice.textContent = errorMessage;
+        }
+    }
+}
+
+if (studyFullscreenBtn && studyClockPanel) {
+    studyFullscreenBtn.addEventListener("click", () => {
+        setFullscreen(
+            studyClockPanel,
+            document.fullscreenElement !== studyClockPanel,
+            "Could not change the study room full screen."
+        );
+    });
+    studyFullscreenExitBtn?.addEventListener("click", () => {
+        setFullscreen(studyClockPanel, false, "Could not exit the study room full screen.");
+    });
+}
+
+if (timerFullscreenBtn && studyTimerSection) {
+    timerFullscreenBtn.addEventListener("click", () => {
+        setFullscreen(
+            studyTimerSection,
+            document.fullscreenElement !== studyTimerSection,
+            "Could not change the timer full screen."
+        );
+    });
+    timerFullscreenExitBtn?.addEventListener("click", () => {
+        setFullscreen(studyTimerSection, false, "Could not exit the timer full screen.");
+    });
+}
+
+document.addEventListener("fullscreenchange", () => {
+    const timerIsFullscreen = document.fullscreenElement === studyTimerSection;
+    const studyIsFullscreen = document.fullscreenElement === studyClockPanel;
+
+    if (isClockFullscreen()) {
+        keepScreenAwake();
+    } else {
+        releaseScreenWakeLock();
+        if (window.matchMedia("(pointer: coarse)").matches) {
+            try {
+                screen.orientation?.unlock?.();
+            } catch (error) {
+                console.warn("Could not unlock the phone orientation:", error);
+            }
+        }
+    }
+
+    if (timerFullscreenBtn) {
+        timerFullscreenBtn.innerHTML = timerIsFullscreen
+            ? '<i class="fas fa-compress"></i> <span>EXIT FULL SCREEN</span>'
+            : '<i class="fas fa-expand"></i> <span>FULL SCREEN TIMER</span>';
+        timerFullscreenBtn.setAttribute("aria-expanded", String(timerIsFullscreen));
+        timerFullscreenBtn.setAttribute("aria-label", timerIsFullscreen ? "Exit full screen" : "Enter full screen");
+    }
+    if (studyFullscreenBtn) {
+        studyFullscreenBtn.innerHTML = studyIsFullscreen
+            ? '<i class="fas fa-compress"></i> EXIT FULL SCREEN'
+            : '<i class="fas fa-expand"></i> FULL SCREEN TIMER';
+    }
+});
+
+document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && isClockFullscreen()) {
+        keepScreenAwake();
+    }
+});
 
 /* COMMUNITY CHALLENGES + WEEKLY LEADERBOARD */
 const CHALLENGE_DEFINITIONS = [
@@ -1464,7 +1851,8 @@ function formatChallengeTime(seconds) {
 }
 
 async function loadCommunityFeatures(uid) {
-    await Promise.all([loadChallenges(uid), loadWeeklyLeaderboard(uid)]);
+    await Promise.all([loadWeeklyLeaderboard(uid)]);
+    await initStudyRooms(uid);
     await Promise.all([loadMyLeagues(), loadTodoList()]);
 }
 
@@ -1714,15 +2102,34 @@ async function loadLeagueRanking() {
     if (!activeLeagueData || !list) return;
     list.textContent = "Calculating all-time study totals...";
     try {
-        const sessionSnap = await getDocs(collection(db, "studySessions"));
-        const members = new Map((activeLeagueData.memberUids || []).map(uid => [uid, { uid, username: "Member", seconds: 0, countdownSeconds: 0, stopwatchSeconds: 0 }]));
+        const members = new Map((activeLeagueData.memberUids || []).map(uid => [uid, { uid, username: "Member", seconds: 0, countdownSeconds: 0, stopwatchSeconds: 0, studySessionSeconds: 0 }]));
+        const memberUids = [...members.keys()];
+        const roomSessionQueries = [];
+        for (let i = 0; i < memberUids.length; i += 30) {
+            roomSessionQueries.push(getDocs(query(
+                collection(db, "studyRoomCompletions"),
+                where("uid", "in", memberUids.slice(i, i + 30))
+            )));
+        }
+        const [sessionSnap, roomSessionSnaps] = await Promise.all([
+            getDocs(collection(db, "studySessions")),
+            Promise.all(roomSessionQueries)
+        ]);
         sessionSnap.forEach(item => { const d = item.data(); const member = members.get(d.uid); if (member && d.status === "completed") { const seconds = Math.max(0, Number(d.durationSeconds) || 0); member.seconds += seconds; if (d.mode === "countdown") member.countdownSeconds += seconds; if (d.mode === "stopwatch") member.stopwatchSeconds += seconds; if (d.username) member.username = d.username; } });
+        roomSessionSnaps.forEach(snapshot => snapshot.forEach(item => {
+            const data = item.data();
+            const member = members.get(data.uid);
+            if (!member) return;
+            const seconds = Math.max(0, Number(data.durationSeconds) || 0);
+            member.seconds += seconds;
+            member.studySessionSeconds += seconds;
+        }));
         const profiles = await Promise.all([...members.keys()].map(uid => getDoc(doc(db, "publicProfiles", uid))));
         const ownerUids = new Set();
         profiles.forEach(p => { if (p.exists() && members.has(p.id)) { members.get(p.id).username = p.data().username || members.get(p.id).username; if (p.data().isOwner === true) ownerUids.add(p.id); } });
         const ranked = [...members.values()].sort((a,b) => b.seconds-a.seconds);
         list.replaceChildren();
-        ranked.forEach((member, i) => { const row = document.createElement("div"); row.className = "friend-list-row"; const name = document.createElement("strong"); name.textContent = `${i+1}. ${member.username}${member.uid === auth.currentUser.uid ? " (YOU)" : ""}`; if (ownerUids.has(member.uid)) appendOwnerTag(name, "👑 OWNER"); const time = document.createElement("small"); time.textContent = `${formatChallengeTime(member.seconds)}  |  ⏳ ${formatChallengeTime(member.countdownSeconds)}  |  ⏱ ${formatChallengeTime(member.stopwatchSeconds)}`; time.title = "Total study time | Countdown | Stopwatch"; row.append(name,time); list.append(row); });
+        ranked.forEach((member, i) => { const row = document.createElement("div"); row.className = "friend-list-row"; const name = document.createElement("strong"); name.textContent = `${i+1}. ${member.username}${member.uid === auth.currentUser.uid ? " (YOU)" : ""}`; if (ownerUids.has(member.uid)) appendOwnerTag(name, "👑 OWNER"); const time = document.createElement("small"); time.textContent = `${formatChallengeTime(member.seconds)}  |  ⏳ ${formatChallengeTime(member.countdownSeconds)}  |  ⏱ ${formatChallengeTime(member.stopwatchSeconds)}  |  📚 ${formatChallengeTime(member.studySessionSeconds)}`; time.title = "Total study time | Countdown | Stopwatch | Study Session"; row.append(name,time); list.append(row); });
     } catch (error) { console.error(error); list.textContent = `Could not calculate ranking (${error.code || error.message}).`; }
 }
 
@@ -1797,57 +2204,6 @@ timerFinishBtn.addEventListener("click", () => finishStudySession(false));
 timerResetBtn.addEventListener("click", resetStudySession);
 
 
-/* WEBSITE FULLSCREEN TOGGLE
-   Adds a button to the dashboard header. It enters true browser fullscreen
-   for the whole website and changes into an Exit Fullscreen button. */
-(() => {
-    const topbar = document.querySelector(".topbar");
-    if (!topbar || document.getElementById("websiteFullscreenBtn")) return;
-
-    const fullscreenBtn = document.createElement("button");
-    fullscreenBtn.type = "button";
-    fullscreenBtn.id = "websiteFullscreenBtn";
-    fullscreenBtn.className = "website-fullscreen-btn";
-    fullscreenBtn.innerHTML = '<span aria-hidden="true">⛶</span> <span class="fullscreen-label">Full Screen</span>';
-    fullscreenBtn.setAttribute("aria-label", "Enter full screen");
-    fullscreenBtn.title = "Enter full screen";
-    fullscreenBtn.style.cssText = [
-        "display:inline-flex", "align-items:center", "justify-content:center",
-        "gap:7px", "min-height:38px", "padding:8px 12px", "border:1px solid rgba(255,255,255,.16)",
-        "border-radius:10px", "background:rgba(255,255,255,.07)", "color:inherit",
-        "font:inherit", "font-size:13px", "font-weight:700", "cursor:pointer",
-        "white-space:nowrap", "flex:0 0 auto"
-    ].join(";");
-
-    const userArea = topbar.querySelector(".topbar-user");
-    (userArea || topbar).prepend(fullscreenBtn);
-
-    const updateFullscreenButton = () => {
-        const active = Boolean(document.fullscreenElement);
-        fullscreenBtn.innerHTML = active
-            ? '<span aria-hidden="true">✕</span> <span class="fullscreen-label">Exit Full Screen</span>'
-            : '<span aria-hidden="true">⛶</span> <span class="fullscreen-label">Full Screen</span>';
-        fullscreenBtn.setAttribute("aria-label", active ? "Exit full screen" : "Enter full screen");
-        fullscreenBtn.title = active ? "Exit full screen (Esc)" : "Enter full screen";
-    };
-
-    fullscreenBtn.addEventListener("click", async () => {
-        try {
-            if (document.fullscreenElement) {
-                await document.exitFullscreen();
-            } else {
-                await document.documentElement.requestFullscreen();
-            }
-        } catch (error) {
-            console.error("Fullscreen could not be changed:", error);
-            appAlert("Your browser could not enable full screen. Try using the browser's full-screen shortcut (F11).");
-        }
-    });
-
-    document.addEventListener("fullscreenchange", updateFullscreenButton);
-    updateFullscreenButton();
-})();
-
 /* RESTORE AUTH SESSION */
 onAuthStateChanged(auth, async user => {
     if (authFlowInProgress) return;
@@ -1863,27 +2219,10 @@ onAuthStateChanged(auth, async user => {
         }
         stopTimerTicker();
         currentProfile = null;
+        if (studyRoomUnsubscribe) studyRoomUnsubscribe(); if (studyInviteUnsubscribe) studyInviteUnsubscribe(); if (activeStudyRoomUnsubscribe) activeStudyRoomUnsubscribe(); if (studyRoomStatsUnsubscribe) studyRoomStatsUnsubscribe();
+        studyRoomUnsubscribe = studyInviteUnsubscribe = activeStudyRoomUnsubscribe = studyRoomStatsUnsubscribe = null; activeStudyRoomId = null; activeStudyRoomData = null;
+        if (studyRoomTicker) clearInterval(studyRoomTicker); studyRoomTicker = null;
     }
 });
 
 
-// Expand/collapse the study countdown and stopwatch into a focused full-screen view.
-const timerExpandBtn = document.getElementById("timerExpandBtn");
-const studyTimerSection = document.getElementById("studyTimer");
-if (timerExpandBtn && studyTimerSection) {
-    const setTimerExpanded = expanded => {
-        studyTimerSection.classList.toggle("timer-expanded", expanded);
-        document.body.classList.toggle("timer-overlay-open", expanded);
-        timerExpandBtn.setAttribute("aria-expanded", String(expanded));
-        timerExpandBtn.innerHTML = expanded ? '⤢ <span>Small</span>' : '⛶ <span>Big</span>';
-        timerExpandBtn.setAttribute("aria-label", expanded ? "Shrink timer" : "Expand timer");
-    };
-    timerExpandBtn.addEventListener("click", () => {
-        setTimerExpanded(!studyTimerSection.classList.contains("timer-expanded"));
-    });
-    document.addEventListener("keydown", event => {
-        if (event.key === "Escape" && studyTimerSection.classList.contains("timer-expanded")) {
-            setTimerExpanded(false);
-        }
-    });
-}

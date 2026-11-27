@@ -55,7 +55,7 @@
 <a class="nav-link active" data-page="overview" href="#overview"><span>⌂</span> Overview</a>
 <a class="nav-link" data-page="study" href="#study"><span>◴</span> Study Timer</a>
 <a class="nav-link" data-page="exams" href="#exams"><span>◷</span> Exam Countdown</a>
-<a class="nav-link" data-page="challenges" href="#challenges"><span>⚡</span> Challenges</a>
+<a class="nav-link" data-page="challenges" href="#challenges"><span>📚</span> Study Session</a>
 <a class="nav-link" data-page="leaderboard" href="#leaderboard"><span>♛</span> Leaderboard</a>
 <a class="nav-link" data-page="friends" href="#friends"><span>♧</span> Friends</a>
 <a class="nav-link" data-page="league" href="#league"><span>🏆</span> League</a>
@@ -64,6 +64,7 @@
     <button class="nav-link fai-desktop-link" id="faiDesktopLauncher" type="button"><span>✦</span> Fantzawya AI</button>
 </nav>
 <div class="sidebar-bottom">
+    
 <div class="sidebar-user">
 <div class="avatar" id="sidebarAvatar">U</div>
 <div class="user-details"><strong id="sidebarUsername">User</strong><small>Community Member</small></div>
@@ -112,7 +113,7 @@
 <h3>Study Timer</h3>
 <p>Choose your mode, focus, and save your completed study time.</p>
 </div>
-<div class="timer-heading-actions"><button class="timer-expand-btn" id="timerExpandBtn" type="button" aria-expanded="false" aria-label="Expand timer">⛶ <span>Big</span></button><span class="timer-heading-icon">◴</span></div>
+<div class="timer-heading-actions"><button class="timer-expand-btn" id="timerExpandBtn" type="button" aria-controls="studyTimer" aria-expanded="false" aria-label="Enter full screen"><i class="fas fa-expand"></i> <span>FULL SCREEN TIMER</span></button><span class="timer-heading-icon">◴</span></div>
 </div>
 <div class="timer-mode-switch">
 <button class="timer-mode-btn active" data-mode="countdown" id="countdownModeBtn" type="button">
@@ -133,7 +134,7 @@
 </div>
 <p class="timer-hint">Choose from 1 minute up to 24 hours.</p>
 </div>
-<div class="timer-clock-wrap">
+<div class="timer-clock-wrap" id="timerClockPanel">
 <div class="timer-progress" id="timerProgress">
 <div class="timer-clock">
 <span class="timer-state" id="timerState">READY TO FOCUS</span>
@@ -141,6 +142,7 @@
 <span class="timer-mode-caption" id="timerModeCaption">COUNTDOWN SESSION</span>
 </div>
 </div>
+<button class="study-fullscreen-exit timer-fullscreen-exit" id="timerFullscreenExitBtn" type="button"><i class="fas fa-compress"></i> EXIT FULL SCREEN</button>
 </div>
 <div class="timer-controls">
 <button class="timer-main-btn" id="timerStartBtn" type="button">▶ START STUDYING</button>
@@ -165,15 +167,109 @@
   </div>
   <p id="examStatus" class="community-note" aria-live="polite">No exam date selected yet.</p>
  </article>
-</section></section><section class="app-page" data-page="challenges" id="page-challenges"><section class="community-section" id="challenges">
-<div class="section-heading">
-<div><span class="section-kicker">PUSH YOUR LIMITS</span><h3>Study Challenges</h3></div>
-<span class="community-caption">COMPETE WITH YOURSELF</span>
+</section></section><section class="app-page" data-page="challenges" id="page-challenges"><section class="community-section study-room-section" id="studySessions">
+<div class="section-heading"><div><span class="section-kicker">FOCUS TOGETHER</span><h3>Study Session</h3></div><span class="community-caption">PLAN • INVITE • FOCUS</span></div>
+<p class="community-description">Create a shared study room, invite your friends, and let the host control the session timer.</p>
+<div class="study-room-layout">
+ <article class="panel study-room-create"><div class="study-room-panel-icon">✦</div><h4>Create a study room</h4><p class="panel-description">Choose how long you want to study and invite your friends.</p>
+  <label for="studyRoomName">Session name</label><input id="studyRoomName" maxlength="48" placeholder="Example: Biology revision">
+  <label for="studyRoomMode">Timer type</label><select id="studyRoomMode"><option value="stopwatch">Stopwatch — count up</option><option value="countdown">Countdown — set duration</option><option value="until">Until a specific time</option></select>
+  <div id="studyCountdownFields" class="study-time-fields"><label for="studyRoomMinutes">Duration (minutes)</label><input id="studyRoomMinutes" type="number" min="1" max="1440" value="60"></div>
+  <div id="studyUntilFields" class="study-time-fields" hidden><label for="studyRoomEndAt">End date & time</label><input id="studyRoomEndAt" type="datetime-local"></div>
+  <label for="studyRoomFriends">Invite friends</label><select id="studyRoomFriends" multiple size="4" aria-label="Choose friends to invite"><option disabled>Loading friends...</option></select><small class="study-field-hint">Use Ctrl (or Command) to select more than one friend.</small>
+  <button class="community-action-btn study-create-btn" id="createStudyRoomBtn" type="button">CREATE STUDY ROOM</button><p class="community-note" id="studyRoomCreateStatus" aria-live="polite"></p>
+ </article>
+ <article class="panel study-room-inbox"><div class="panel-heading"><div><span class="section-kicker">YOUR INBOX</span><h4>Study invitations</h4></div><span class="study-inbox-count" id="studyInviteCount">0</span></div><div id="studyInvitesList" class="friends-list"><p class="community-loading">Loading invitations...</p></div></article>
 </div>
-<p class="community-description">Join a goal and your completed timer sessions will update its progress automatically.</p>
-<div class="challenge-grid" id="challengeGrid">
-<div class="community-loading">Loading challenges...</div>
-</div>
+<article class="panel study-active-panel"><div class="panel-heading"><div><span class="section-kicker">LIVE COLLABORATION</span><h4>My study rooms</h4></div><span class="study-live-indicator"><i></i> LIVE SYNC</span></div><div id="myStudyRoomsList" class="study-rooms-list"><p class="community-loading">Loading your study rooms...</p></div></article>
+
+
+
+<article class="panel study-room-live" id="studyRoomLivePanel" hidden>
+
+    <!-- ROOM HEADER -->
+    <div class="study-live-header">
+        <div>
+            <span class="section-kicker">SHARED FOCUS ROOM</span>
+            <h4 id="studyLiveRoomTitle">Study Session</h4>
+            <p id="studyLiveRoomMembers"></p>
+        </div>
+
+        <span class="study-room-status" id="studyLiveStatus">
+            WAITING
+        </span>
+    </div>
+
+    <!-- TIMER PANEL -->
+    <div class="study-clock-wrap" id="studyClockPanel">
+
+        <span id="studyLiveModeLabel">STOPWATCH</span>
+
+        <strong id="studyLiveClock">00:00:00</strong>
+
+        <small id="studyLiveSubtext">
+            Waiting for the host to start
+        </small>
+
+        <!-- HOST CONTROLS: ONE COPY ONLY -->
+        <div class="study-host-controls" id="studyHostControls" hidden>
+
+            <button
+                class="community-action-btn fullscreen-control-btn"
+                id="studyHostStartBtn"
+                type="button">
+                <i class="fas fa-play"></i>
+                START SESSION
+            </button>
+
+            <button
+                class="mini-action danger-action fullscreen-control-btn"
+                id="studyHostStopBtn"
+                type="button"
+                hidden>
+                <i class="fas fa-stop"></i>
+                END SESSION
+            </button>
+
+        </div>
+
+        <!-- FULLSCREEN EXIT -->
+        <button
+            type="button"
+            id="studyFullscreenExitBtn"
+            class="study-fullscreen-exit">
+            <i class="fas fa-compress"></i>
+            EXIT FULL SCREEN
+        </button>
+
+    </div>
+
+    <!-- ENTER FULLSCREEN -->
+    <button
+        type="button"
+        id="studyFullscreenBtn"
+        class="study-fullscreen-trigger">
+        <i class="fas fa-expand"></i>
+        FULL SCREEN TIMER
+    </button>
+
+    <!-- ROOM NOTICE -->
+    <p
+        class="community-note"
+        id="studyLiveNotice"
+        aria-live="polite">
+    </p>
+
+    <!-- PARTICIPANTS -->
+    <div
+        class="study-room-participants"
+        id="studyLiveParticipants">
+    </div>
+
+</article>
+
+
+
 </section></section><section class="app-page" data-page="leaderboard" id="page-leaderboard"><section class="community-section" id="leaderboard">
 <div class="section-heading">
 <div><span class="section-kicker">THE COMMUNITY</span><h3>All-time Leaderboard</h3></div>
@@ -243,9 +339,10 @@
     <article class="stat-card"><span class="stat-label">TOTAL STUDY TIME</span><h2 id="profileStudyTime">0s</h2></article>
     <article class="stat-card"><span class="stat-label">⏳ COUNTDOWN</span><h2 id="profileCountdownTime">0s</h2></article>
     <article class="stat-card"><span class="stat-label">⏱ STOPWATCH</span><h2 id="profileStopwatchTime">0s</h2></article>
+    <article class="stat-card"><span class="stat-label">📚 STUDY SESSION</span><h2 id="profileStudySessionTime">0s</h2></article>
    </div>
    <p class="community-note" style="text-align:center"><span id="profileSessionCount">0</span> completed sessions</p>
-   <div class="profile-study-reset"><button id="resetStudyStatsBtn" class="mini-action danger-action" type="button">↻ RESET STUDY STATS</button><p class="community-note">This clears your saved completed study sessions and resets your totals.</p></div>
+   <div class="profile-study-reset"><button id="resetStudyStatsBtn" class="mini-action danger-action" type="button">↻ RESET STUDY STATS</button><p class="community-note">This clears your completed timer sessions and shared Study Session records.</p></div>
    </div>
    <div class="profile-edit">
     <h4>Customize your profile</h4>
@@ -285,7 +382,7 @@
 <a class="mobile-nav-link active" data-page="overview" href="#overview"><span>⌂</span><small>Home</small></a>
 <a class="mobile-nav-link" data-page="study" href="#study"><span>◴</span><small>Study Timer</small></a>
 <a class="mobile-nav-link" data-page="exams" href="#exams"><span>◷</span><small>Exam Countdown</small></a>
-<a class="mobile-nav-link" data-page="challenges" href="#challenges"><span>⚡</span><small>Challenges</small></a>
+<a class="mobile-nav-link" data-page="challenges" href="#challenges"><span>📚</span><small>Study</small></a>
 <a class="mobile-nav-link" data-page="leaderboard" href="#leaderboard"><span>♛</span><small>Ranks</small></a>
 <a class="mobile-nav-link" data-page="friends" href="#friends"><span>♧</span><small>Friends</small></a>
 <a class="mobile-nav-link" data-page="league" href="#league"><span>🏆</span><small>League</small></a>

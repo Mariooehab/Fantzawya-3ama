@@ -4,12 +4,13 @@ FANTZAWYA 3AMA — EXPANDED COMMUNITY BUILD
 2) Firebase Console > Firestore Database > Rules: publish firestore.rules.
 3) No Firebase Storage is used. Profile photos are saved as external image URLs in both users/{uid} and publicProfiles/{uid}.
 4) Friends load current public profile data so updated names and photos appear after refresh/reopening Friends.
-5) League: create a league, share its 8-character invite code, join with the code, add shared tasks, and view all-time study ranking for its members.
+5) League: create a league, share its 8-character invite code, join with the code, add shared tasks, and view ranking split into total, Countdown, Stopwatch, and Study Session time.
 6) To-do & Notes: personal tasks and notes are stored in users/{uid}/todos and remain after logging out/reopening. Optional due date/time is shown as a reminder in the list.
 7) All-time leaderboard sums completed studySessions saved since account creation.
 
 IMPORTANT LIMITATIONS
-- Study totals are based on client-created timer sessions and are not cheat-proof. Strong anti-cheat scoring and secure invite redemption require a trusted backend (Cloud Functions / server).
+- Countdown and Stopwatch totals are based on client-created timer sessions and are not cheat-proof. Shared Study Session time is recorded by a trusted Firebase Cloud Function when a room ends; the full duration is credited to every member in the room at completion.
+- Deploy Firestore Rules and the `recordCompletedStudyRoom` Cloud Function for shared Study Session time to appear in profiles and League rankings. Only rooms completed after the function is deployed are recorded; past completed rooms are not backfilled automatically.
 - Due reminders are displayed in the site; browser notifications while the site is closed are not implemented.
 - Firestore Rules permit signed-in users to read league documents so invite-code lookup works. Use a backend callable function before using this for sensitive/private leagues.
 
@@ -29,8 +30,8 @@ IMPORTANT LIMITATIONS
    - For production, enable Firebase App Check and set enforceAppCheck: true after configuring the web app.
 
 
-9) FANTZAWYA AI — CLOUDFLARE WORKERS (NO FIREBASE BLAZE REQUIRED)
-   IMPORTANT: Do NOT deploy Firebase Functions for this setup. The AI endpoint runs on Cloudflare Workers.
+9) FANTZAWYA AI — CLOUDFLARE WORKERS (AI endpoint does not require Firebase Functions)
+   IMPORTANT: Cloudflare replaces only the AI endpoint. Shared Study Session statistics still require Firebase Functions; deploy `recordCompletedStudyRoom` with `firebase deploy --only functions:recordCompletedStudyRoom` (Firebase Blaze plan required).
    A) Create/login to a Cloudflare account, open Workers & Pages, and create a Worker named fantzawya-ai.
    B) Deploy the contents of cloudflare-worker/src/index.js as the Worker code (or use Wrangler from the cloudflare-worker folder: npm create cloudflare@latest is not needed; install Wrangler with npm.cmd install -g wrangler, then run wrangler deploy).
    C) In Worker Settings > Variables and Secrets, add: GEMINI_API_KEY as a SECRET (your Google AI Studio Gemini API key); FIREBASE_API_KEY as a TEXT variable (copy apiKey from firebase.js); ALLOWED_ORIGIN as a TEXT variable (your exact website origin, e.g. https://example.com, with no trailing slash).
