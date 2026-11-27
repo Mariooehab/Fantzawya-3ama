@@ -1875,7 +1875,7 @@ if (timerExpandBtn && studyTimerSection) {
         studyTimerSection.classList.toggle("timer-expanded", expanded);
         document.body.classList.toggle("timer-overlay-open", expanded);
         timerExpandBtn.setAttribute("aria-expanded", String(expanded));
-        timerExpandBtn.innerHTML = expanded ? '⤢ <span>تصغير</span>' : '⛶ <span>تكبير</span>';
+        timerExpandBtn.innerHTML = expanded ? '⤢ <span>Small</span>' : '⛶ <span>Big</span>';
         timerExpandBtn.setAttribute("aria-label", expanded ? "Shrink timer" : "Expand timer");
     };
     timerExpandBtn.addEventListener("click", () => {
