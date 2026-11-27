@@ -77,6 +77,9 @@ const timerSetup = document.getElementById("timerSetup");
 const timerHoursInput = document.getElementById("timerHours");
 const timerMinutesInput = document.getElementById("timerMinutes");
 const timerSecondsInput = document.getElementById("timerSeconds");
+const timerBreakIntervalHoursInput = document.getElementById("timerBreakIntervalHours");
+const timerBreakIntervalMinutesInput = document.getElementById("timerBreakIntervalMinutes");
+const timerBreakMinutesInput = document.getElementById("timerBreakMinutes");
 const timerDisplay = document.getElementById("timerDisplay");
 const timerState = document.getElementById("timerState");
 const timerModeCaption = document.getElementById("timerModeCaption");
@@ -86,6 +89,12 @@ const timerPauseBtn = document.getElementById("timerPauseBtn");
 const timerResumeBtn = document.getElementById("timerResumeBtn");
 const timerFinishBtn = document.getElementById("timerFinishBtn");
 const timerResetBtn = document.getElementById("timerResetBtn");
+const timerStartBreakBtn = document.getElementById("timerStartBreakBtn");
+const timerStartStudyBtn = document.getElementById("timerStartStudyBtn");
+const timerAddTimeControl = document.getElementById("timerAddTimeControl");
+const timerAddTimeSelect = document.getElementById("timerAddTimeSelect");
+const timerAddTimeCustomInput = document.getElementById("timerAddTimeCustom");
+const timerAddTimeBtn = document.getElementById("timerAddTimeBtn");
 const timerMessage = document.getElementById("timerMessage");
 
 let currentProfile = null;
@@ -108,6 +117,7 @@ let timerInterval = null;
 let timerMode = "countdown";
 let activeSession = null;
 let finishingSession = false;
+let startingSession = false;
 
 let appPopupResolver = null;
 let appPopupLastMessage = "";
@@ -1023,16 +1033,118 @@ function formatStudyTotal(totalSeconds) {
     return `${seconds}s`;
 }
 
-function getElapsedMilliseconds(session, now = Date.now()) {
-    if (session.status === "paused") return session.elapsedBeforePauseMs || 0;
-    return (session.elapsedBeforePauseMs || 0) + Math.max(0, now - session.segmentStartedAtMs);
+function getPhaseElapsedMilliseconds(session, now = Date.now()) {
+    const savedElapsed = Math.max(0, Number(session.phaseElapsedBeforePauseMs) || 0);
+    if (session.status !== "running" || !session.phaseStartedAtMs) return savedElapsed;
+    return savedElapsed + Math.max(0, now - session.phaseStartedAtMs);
+}
+
+function getStudyElapsedMilliseconds(session, now = Date.now()) {
+    const completedStudyMs = Math.max(0, Number(session.completedStudyMs) || 0);
+    return completedStudyMs + (session.phase === "study" ? getPhaseElapsedMilliseconds(session, now) : 0);
+}
+
+function getStudySinceBreakMilliseconds(session, now = Date.now()) {
+    const savedStudyMs = Math.max(0, Number(session.studySinceBreakMs) || 0);
+    return savedStudyMs + (session.phase === "study" ? getPhaseElapsedMilliseconds(session, now) : 0);
+}
+
+function getCurrentBreakDurationMilliseconds(session) {
+    return Math.max(0, Number(session.breakDurationSeconds) + (Number(session.breakExtraSeconds) || 0)) * 1000;
+}
+
+function advanceManualTimer(session, now = Date.now()) {
+    if (!session || session.status !== "running") return false;
+
+    const phaseElapsedMs = getPhaseElapsedMilliseconds(session, now);
+    if (session.phase === "break") {
+        const breakDurationMs = getCurrentBreakDurationMilliseconds(session);
+        if (phaseElapsedMs >= breakDurationMs) {
+            session.phaseElapsedBeforePauseMs = breakDurationMs;
+            session.phaseStartedAtMs = null;
+            session.status = "break-finished";
+            return true;
+        }
+        return false;
+    }
+
+    const completedStudyMs = Math.max(0, Number(session.completedStudyMs) || 0);
+    const studyDurationMs = Math.max(1000, Number(session.studyDurationSeconds) * 1000);
+    if (session.mode === "countdown" && completedStudyMs + phaseElapsedMs >= studyDurationMs) {
+        session.completedStudyMs = studyDurationMs;
+        session.phaseElapsedBeforePauseMs = 0;
+        session.phaseStartedAtMs = null;
+        session.status = "completed";
+        return true;
+    }
+
+    if (!session.breakDue &&
+        getStudySinceBreakMilliseconds(session, now) >= Math.max(60000, Number(session.breakIntervalSeconds) * 1000)) {
+        session.breakDue = true;
+        return true;
+    }
+    return false;
+}
+
+function beginManualBreak(session, now = Date.now()) {
+    if (!session || session.phase !== "study" || session.status !== "running") return false;
+
+    advanceManualTimer(session, now);
+    if (session.status !== "running" || session.phase !== "study" || !session.breakDue) return false;
+
+    const studyElapsedMs = getPhaseElapsedMilliseconds(session, now);
+    session.completedStudyMs = (Number(session.completedStudyMs) || 0) + studyElapsedMs;
+    session.studySinceBreakMs = (Number(session.studySinceBreakMs) || 0) + studyElapsedMs;
+    session.phase = "break";
+    session.phaseElapsedBeforePauseMs = 0;
+    session.phaseStartedAtMs = now;
+    session.breakDue = false;
+    session.breakExtraSeconds = 0;
+    return true;
+}
+
+function beginManualStudy(session, now = Date.now()) {
+    if (!session || session.phase !== "break" || session.status !== "break-finished") return false;
+
+    session.phase = "study";
+    session.phaseElapsedBeforePauseMs = 0;
+    session.phaseStartedAtMs = now;
+    session.studySinceBreakMs = 0;
+    session.breakDue = false;
+    session.breakExtraSeconds = 0;
+    session.status = "running";
+    return true;
+}
+
+function addMinutesToSession(session, minutes) {
+    if (!session || !["running", "paused"].includes(session.status)) {
+        throw new Error("Time can only be added to a running or paused session.");
+    }
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+        throw new Error("Time to add must be between 1 and 1440 whole minutes.");
+    }
+
+    const addedSeconds = minutes * 60;
+    if (session.phase === "study" && session.mode === "countdown") {
+        const newDurationSeconds = Number(session.studyDurationSeconds) + addedSeconds;
+        if (newDurationSeconds > 86400) throw new Error("Countdown study time cannot exceed 24 hours.");
+        session.studyDurationSeconds = newDurationSeconds;
+        session.plannedSeconds = newDurationSeconds;
+        return "study";
+    }
+    if (session.phase === "break") {
+        session.breakExtraSeconds = (Number(session.breakExtraSeconds) || 0) + addedSeconds;
+        return "break";
+    }
+    throw new Error("Extra time is available during Countdown study and breaks.");
 }
 
 function getPausedMilliseconds(session, now = Date.now()) {
-    return (session.pausedTotalMs || 0) +
-        (session.status === "paused" && session.pauseStartedAtMs
-            ? Math.max(0, now - session.pauseStartedAtMs)
-            : 0);
+    const pausedTotalMs = Math.max(0, Number(session.pausedTotalMs) || 0);
+    const pauseStartedAtMs = Number(session.pauseStartedAtMs);
+    return pausedTotalMs + (session.status === "paused" && pauseStartedAtMs > 0
+        ? Math.max(0, now - pauseStartedAtMs)
+        : 0);
 }
 
 function saveLocalSession() {
@@ -1051,80 +1163,284 @@ function setTimerMode(mode) {
     const isCountdown = mode === "countdown";
     countdownModeBtn.classList.toggle("active", isCountdown);
     stopwatchModeBtn.classList.toggle("active", !isCountdown);
-    timerSetup.hidden = !isCountdown;
-    timerModeCaption.textContent = isCountdown ? "COUNTDOWN SESSION" : "STOPWATCH SESSION";
+    timerSetup.hidden = false;
+    timerModeCaption.textContent = `${isCountdown ? "COUNTDOWN" : "STOPWATCH"} • STUDY`;
+    studyTimerSection.classList.remove("is-break");
 
-    if (isCountdown) {
-        const seconds = getSelectedCountdownSeconds();
-        timerDisplay.textContent = formatDuration(seconds);
-    } else {
+    let modeError = null;
+    try {
+        timerDisplay.textContent = isCountdown ? formatDuration(getSelectedCountdownSeconds()) : "00:00:00";
+    } catch (error) {
         timerDisplay.textContent = "00:00:00";
+        modeError = error;
     }
     timerState.textContent = "READY TO FOCUS";
-    setTimerMessage(isCountdown ? "Set your duration and start studying." : "Start the stopwatch whenever you're ready.");
+    setTimerMessage(modeError?.message || (isCountdown ? "Set your duration and start studying." : "Start the stopwatch whenever you're ready."), Boolean(modeError));
     timerProgress.style.setProperty("--progress", "0%");
 }
 
 function getSelectedCountdownSeconds() {
-    const hours = Number.parseInt(timerHoursInput.value, 10);
-    const minutes = Number.parseInt(timerMinutesInput.value, 10);
-    const seconds = Number.parseInt(timerSecondsInput.value, 10);
+    const hours = Number(timerHoursInput.value);
+    const minutes = Number(timerMinutesInput.value);
+    const seconds = Number(timerSecondsInput.value);
 
     if (!Number.isInteger(hours) || !Number.isInteger(minutes) || !Number.isInteger(seconds) ||
+        !timerHoursInput.value.trim() || !timerMinutesInput.value.trim() || !timerSecondsInput.value.trim() ||
         hours < 0 || hours > 24 || minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59) {
-        throw new Error("Enter a valid duration: hours 0-24, minutes and seconds 0-59.");
+        throw new Error("Enter a valid study duration: hours 0-24, minutes and seconds 0-59.");
     }
 
     const total = hours * 3600 + minutes * 60 + seconds;
     if (total < 1 || total > 86400) {
-        throw new Error("Countdown must be between 1 second and 24 hours.");
+        throw new Error("Study duration must be between 1 second and 24 hours.");
     }
     return total;
 }
 
-function updateTimerDisplay() {
-    if (!activeSession) return;
+function getSelectedBreakSeconds() {
+    const minutes = Number(timerBreakMinutesInput.value);
+    if (!Number.isInteger(minutes) || !timerBreakMinutesInput.value.trim() || minutes < 1 || minutes > 1440) {
+        throw new Error("Break duration must be between 1 and 1440 minutes.");
+    }
+    return minutes * 60;
+}
 
-    const elapsedSeconds = Math.floor(getElapsedMilliseconds(activeSession) / 1000);
+function getSelectedBreakIntervalSeconds() {
+    const hours = Number(timerBreakIntervalHoursInput.value);
+    const minutes = Number(timerBreakIntervalMinutesInput.value);
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes) ||
+        !timerBreakIntervalHoursInput.value.trim() || !timerBreakIntervalMinutesInput.value.trim() ||
+        hours < 0 || hours > 24 || minutes < 0 || minutes > 59) {
+        throw new Error("Enter a valid break interval: hours 0-24 and minutes 0-59.");
+    }
+    const total = hours * 3600 + minutes * 60;
+    if (total < 60 || total > 86400) {
+        throw new Error("Break interval must be between 1 minute and 24 hours.");
+    }
+    return total;
+}
 
-    if (activeSession.mode === "countdown") {
-        const remaining = Math.max(0, activeSession.plannedSeconds - elapsedSeconds);
-        timerDisplay.textContent = formatDuration(remaining);
-        const progress = Math.min(100, (elapsedSeconds / activeSession.plannedSeconds) * 100);
-        timerProgress.style.setProperty("--progress", `${progress}%`);
+function getTimerSettings() {
+    return {
+        studyDurationSeconds: getSelectedCountdownSeconds(),
+        breakIntervalSeconds: getSelectedBreakIntervalSeconds(),
+        breakDurationSeconds: getSelectedBreakSeconds()
+    };
+}
 
-        if (remaining <= 0 && activeSession.status === "running") {
-            finishStudySession(true);
+function setStudyDurationInputs(totalSeconds) {
+    const seconds = Math.max(1, Math.min(86400, Math.floor(Number(totalSeconds) || 0)));
+    timerHoursInput.value = String(Math.floor(seconds / 3600));
+    timerMinutesInput.value = String(Math.floor((seconds % 3600) / 60));
+    timerSecondsInput.value = String(seconds % 60);
+}
+
+function setBreakIntervalInputs(totalSeconds) {
+    const seconds = Math.max(60, Math.min(86400, Math.floor(Number(totalSeconds) || 0)));
+    timerBreakIntervalHoursInput.value = String(Math.floor(seconds / 3600));
+    timerBreakIntervalMinutesInput.value = String(Math.floor((seconds % 3600) / 60));
+}
+
+function saveTimerSettings(uid = auth.currentUser?.uid, settings = getTimerSettings()) {
+    if (!uid) return;
+    localStorage.setItem(`fantzawya_timer_settings_${uid}`, JSON.stringify(settings));
+}
+
+function loadTimerSettings(uid) {
+    const raw = localStorage.getItem(`fantzawya_timer_settings_${uid}`);
+    if (!raw) return;
+
+    try {
+        const settings = JSON.parse(raw);
+        const studyDurationSeconds = Number(settings.studyDurationSeconds);
+        const breakIntervalSeconds = settings.breakIntervalSeconds == null ? 3600 : Number(settings.breakIntervalSeconds);
+        const breakDurationSeconds = Number(settings.breakDurationSeconds);
+        if (!Number.isInteger(studyDurationSeconds) || studyDurationSeconds < 1 || studyDurationSeconds > 86400 ||
+            !Number.isInteger(breakIntervalSeconds) || breakIntervalSeconds < 60 || breakIntervalSeconds > 86400 ||
+            breakIntervalSeconds % 60 !== 0 ||
+            !Number.isInteger(breakDurationSeconds) || breakDurationSeconds < 60 || breakDurationSeconds > 86400 || breakDurationSeconds % 60 !== 0) {
+            throw new Error("Saved timer settings are outside the allowed range.");
         }
-    } else {
-        timerDisplay.textContent = formatDuration(elapsedSeconds);
-        timerProgress.style.setProperty("--progress", "100%");
+        setStudyDurationInputs(studyDurationSeconds);
+        setBreakIntervalInputs(breakIntervalSeconds);
+        timerBreakMinutesInput.value = String(breakDurationSeconds / 60);
+    } catch (error) {
+        console.warn("Could not restore saved timer settings:", error);
+    }
+}
+
+function applyTimerSettings() {
+    let settings;
+    try {
+        settings = getTimerSettings();
+    } catch (error) {
+        setTimerMessage(error.message, true);
+        return false;
     }
 
-    timerState.textContent = activeSession.status === "paused" ? "SESSION PAUSED" : "FOCUS IN PROGRESS";
+    if (activeSession) {
+        const now = Date.now();
+        const previousStatus = activeSession.status;
+        const breakWasDue = Boolean(activeSession.breakDue);
+        if (activeSession.status === "running") advanceManualTimer(activeSession, now);
+        const studyElapsedMs = getStudyElapsedMilliseconds(activeSession, now);
+        activeSession.studyDurationSeconds = settings.studyDurationSeconds;
+        activeSession.breakIntervalSeconds = settings.breakIntervalSeconds;
+        activeSession.breakDurationSeconds = settings.breakDurationSeconds;
+        if (activeSession.mode === "countdown") activeSession.plannedSeconds = settings.studyDurationSeconds;
+        if (activeSession.status === "running" && activeSession.phase === "study" &&
+            !activeSession.breakDue && getStudySinceBreakMilliseconds(activeSession, now) >= settings.breakIntervalSeconds * 1000) {
+            activeSession.breakDue = true;
+        }
+        if (activeSession.mode === "countdown" && studyElapsedMs >= settings.studyDurationSeconds * 1000 &&
+            !["completed", "saving"].includes(activeSession.status)) {
+            activeSession.completedStudyMs = Math.max(Number(activeSession.completedStudyMs) || 0, studyElapsedMs);
+            activeSession.phase = "study";
+            activeSession.phaseElapsedBeforePauseMs = 0;
+            activeSession.phaseStartedAtMs = null;
+            activeSession.breakDue = false;
+            if (activeSession.status === "paused") {
+                const pauseStartedAtMs = Number(activeSession.pauseStartedAtMs);
+                if (pauseStartedAtMs > 0) {
+                    activeSession.pausedTotalMs = (Number(activeSession.pausedTotalMs) || 0) +
+                        Math.max(0, now - pauseStartedAtMs);
+                }
+                activeSession.pauseStartedAtMs = null;
+            }
+            activeSession.status = "completed";
+        }
+        if (activeSession.phase === "break" && activeSession.status === "running" &&
+            getPhaseElapsedMilliseconds(activeSession, now) >= getCurrentBreakDurationMilliseconds(activeSession)) {
+            activeSession.phaseElapsedBeforePauseMs = getCurrentBreakDurationMilliseconds(activeSession);
+            activeSession.phaseStartedAtMs = null;
+            activeSession.status = "break-finished";
+        }
+        saveLocalSession();
+        updateTimerDisplay();
+        renderTimerControls();
+        if (!breakWasDue && activeSession?.breakDue && activeSession.phase === "study" && activeSession.status !== "saving") {
+            setTimerMessage("It's time for a break. Your study timer is still running; start the break when ready.");
+        } else if (activeSession?.status === "completed") {
+            setTimerMessage("Study duration complete. Finish the session to save your study time.");
+        } else if (activeSession?.status === "break-finished") {
+            setTimerMessage("Break finished. Start studying when you're ready.");
+        } else if (previousStatus === activeSession?.status && !activeSession?.breakDue) {
+            setTimerMessage("Timer settings saved.");
+        }
+    } else {
+        timerModeCaption.textContent = `${timerMode === "countdown" ? "COUNTDOWN" : "STOPWATCH"} • STUDY`;
+        if (timerMode === "countdown") timerDisplay.textContent = formatDuration(settings.studyDurationSeconds);
+    }
+
+    saveTimerSettings();
+    if (!activeSession) setTimerMessage("Timer settings saved.");
+    return true;
+}
+
+function updateTimerDisplay() {
+    if (!activeSession) return;
+    if (activeSession.status !== "running") stopTimerTicker();
+
+    const wasBreakDue = Boolean(activeSession.breakDue);
+    const changed = advanceManualTimer(activeSession);
+    if (changed) {
+        saveLocalSession();
+        if (activeSession.status === "completed") {
+            setTimerMessage("Study duration complete. Finish the session to save your study time.");
+            stopTimerTicker();
+        } else if (activeSession.status === "break-finished") {
+            setTimerMessage("Break finished. Start studying when you're ready.");
+            stopTimerTicker();
+        } else if (!wasBreakDue && activeSession.breakDue) {
+            setTimerMessage("It's time for a break. Your study timer is still running; start the break when ready.");
+        }
+    }
+    studyTimerSection.classList.toggle("is-break", activeSession.phase === "break");
+
+    const phaseDurationMs = activeSession.phase === "break"
+        ? getCurrentBreakDurationMilliseconds(activeSession)
+        : Math.max(60000, Number(activeSession.breakIntervalSeconds) * 1000);
+    const phaseElapsedMs = getPhaseElapsedMilliseconds(activeSession);
+    const remainingStudySeconds = Math.max(0,
+        Number(activeSession.studyDurationSeconds) - getStudyElapsedMilliseconds(activeSession) / 1000);
+    const remainingBreakSeconds = Math.max(0, phaseDurationMs / 1000 - phaseElapsedMs / 1000);
+
+    if (activeSession.phase === "break") {
+        timerDisplay.textContent = formatDuration(remainingBreakSeconds);
+    } else if (activeSession.mode === "countdown") {
+        timerDisplay.textContent = formatDuration(remainingStudySeconds);
+    } else {
+        timerDisplay.textContent = formatDuration(getStudyElapsedMilliseconds(activeSession) / 1000);
+    }
+
+    const progressMs = activeSession.phase === "break"
+        ? phaseElapsedMs
+        : activeSession.mode === "countdown"
+            ? getStudyElapsedMilliseconds(activeSession)
+            : getStudySinceBreakMilliseconds(activeSession);
+    const progressDurationMs = activeSession.phase === "break"
+        ? phaseDurationMs
+        : activeSession.mode === "countdown"
+            ? Number(activeSession.studyDurationSeconds) * 1000
+            : Number(activeSession.breakIntervalSeconds) * 1000;
+    timerProgress.style.setProperty("--progress", `${Math.min(100, progressMs / progressDurationMs * 100)}%`);
+    timerModeCaption.textContent = activeSession.phase === "break"
+        ? "BREAK • STUDY TIME EXCLUDED"
+        : `${activeSession.mode === "countdown" ? "COUNTDOWN" : "STOPWATCH"} • STUDY`;
+    if (activeSession.status === "paused") {
+        timerState.textContent = `SESSION PAUSED • ${activeSession.phase.toUpperCase()}`;
+    } else if (activeSession.status === "break-finished") {
+        timerState.textContent = "BREAK COMPLETE";
+    } else if (activeSession.status === "completed") {
+        timerState.textContent = "STUDY DURATION COMPLETE";
+    } else if (activeSession.phase === "break") {
+        timerState.textContent = "BREAK TIME";
+    } else {
+        timerState.textContent = activeSession.breakDue ? "BREAK DUE • START WHEN READY" : "FOCUS IN PROGRESS";
+    }
+    if (changed) renderTimerControls();
 }
 
 function renderTimerControls() {
     const hasSession = Boolean(activeSession);
     const isPaused = activeSession?.status === "paused";
+    const isSaving = activeSession?.status === "saving";
+    const isRunning = activeSession?.status === "running";
+    const canAdjustTime = hasSession &&
+        ["running", "paused"].includes(activeSession.status) &&
+        (activeSession.phase === "break" || (activeSession.phase === "study" && activeSession.mode === "countdown"));
 
     timerStartBtn.hidden = hasSession;
-    timerPauseBtn.hidden = !hasSession || isPaused;
+    timerPauseBtn.hidden = !isRunning;
     timerResumeBtn.hidden = !hasSession || !isPaused;
     timerFinishBtn.hidden = !hasSession;
     timerResetBtn.hidden = !hasSession;
+    timerStartBreakBtn.hidden = !hasSession || activeSession.phase !== "study" ||
+        !activeSession.breakDue || activeSession.status !== "running";
+    timerStartStudyBtn.hidden = !hasSession || activeSession.phase !== "break" ||
+        activeSession.status !== "break-finished";
+    timerAddTimeControl.hidden = !canAdjustTime;
+    timerAddTimeCustomInput.hidden = timerAddTimeSelect.value !== "custom";
+    timerFinishBtn.disabled = isSaving;
+    timerResetBtn.disabled = isSaving;
+    timerStartBreakBtn.disabled = isSaving;
+    timerStartStudyBtn.disabled = isSaving;
+    timerAddTimeBtn.disabled = isSaving;
 
     countdownModeBtn.disabled = hasSession;
     stopwatchModeBtn.disabled = hasSession;
-    timerHoursInput.disabled = hasSession;
-    timerMinutesInput.disabled = hasSession;
-    timerSecondsInput.disabled = hasSession;
+    timerHoursInput.disabled = isSaving;
+    timerMinutesInput.disabled = isSaving;
+    timerSecondsInput.disabled = isSaving;
+    timerBreakIntervalHoursInput.disabled = isSaving;
+    timerBreakIntervalMinutesInput.disabled = isSaving;
+    timerBreakMinutesInput.disabled = isSaving;
 }
 
 function startTimerTicker() {
     stopTimerTicker();
     updateTimerDisplay();
-    timerInterval = setInterval(updateTimerDisplay, 250);
+    if (activeSession?.status === "running") timerInterval = setInterval(updateTimerDisplay, 250);
 }
 
 function stopTimerTicker() {
@@ -1140,16 +1456,18 @@ async function startStudySession() {
         setTimerMessage("Please log in before starting a study session.", true);
         return;
     }
-    if (activeSession) return;
+    if (activeSession || startingSession) return;
 
-    let plannedSeconds = 0;
+    let settings;
     try {
-        if (timerMode === "countdown") plannedSeconds = getSelectedCountdownSeconds();
+        settings = getTimerSettings();
     } catch (error) {
         setTimerMessage(error.message, true);
         return;
     }
 
+    const plannedSeconds = timerMode === "countdown" ? settings.studyDurationSeconds : 0;
+    startingSession = true;
     timerStartBtn.disabled = true;
     timerStartBtn.textContent = "STARTING...";
 
@@ -1167,24 +1485,31 @@ async function startStudySession() {
         };
 
         await setDoc(sessionRef, newSession);
-        const savedSnapshot = await getDoc(sessionRef);
-        const startedAt = savedSnapshot.data()?.startedAt?.toMillis?.() || Date.now();
+        const now = Date.now();
 
         activeSession = {
             id: sessionRef.id,
             mode: timerMode,
             plannedSeconds,
-            startedAtMs: startedAt,
-            segmentStartedAtMs: Date.now(),
-            elapsedBeforePauseMs: 0,
+            studyDurationSeconds: settings.studyDurationSeconds,
+            breakIntervalSeconds: settings.breakIntervalSeconds,
+            breakDurationSeconds: settings.breakDurationSeconds,
+            phase: "study",
+            phaseElapsedBeforePauseMs: 0,
+            phaseStartedAtMs: now,
+            completedStudyMs: 0,
+            studySinceBreakMs: 0,
+            breakDue: false,
+            breakExtraSeconds: 0,
             pausedTotalMs: 0,
             pauseStartedAtMs: null,
             status: "running"
         };
 
+        saveTimerSettings(user.uid, settings);
         saveLocalSession();
         renderTimerControls();
-        timerState.textContent = "FOCUS IN PROGRESS";
+        timerSetup.hidden = false;
         setTimerMessage("Your study session has started. Stay focused!");
         startTimerTicker();
     } catch (error) {
@@ -1196,50 +1521,130 @@ async function startStudySession() {
             true
         );
     } finally {
+        startingSession = false;
         timerStartBtn.disabled = false;
         timerStartBtn.textContent = "▶ START STUDYING";
     }
 }
 
+function startManualBreak() {
+    const now = Date.now();
+    if (!beginManualBreak(activeSession, now)) {
+        updateTimerDisplay();
+        return;
+    }
+
+    saveLocalSession();
+    renderTimerControls();
+    studyTimerSection.classList.add("is-break");
+    setTimerMessage("Break started. Study countdown is paused and break time is excluded from study totals.");
+    startTimerTicker();
+}
+
+function startManualStudy() {
+    if (!beginManualStudy(activeSession)) return;
+
+    saveLocalSession();
+    renderTimerControls();
+    studyTimerSection.classList.remove("is-break");
+    setTimerMessage("Study resumed. The next break interval starts from now.");
+    startTimerTicker();
+}
+
+function addSelectedTime() {
+    if (!activeSession || !["running", "paused"].includes(activeSession.status)) return;
+
+    const selectedValue = timerAddTimeSelect.value;
+    const minutes = selectedValue === "custom"
+        ? Number(timerAddTimeCustomInput.value)
+        : Number(selectedValue);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+        setTimerMessage("Choose a valid time amount between 1 and 1440 minutes.", true);
+        return;
+    }
+
+    let target;
+    try {
+        target = addMinutesToSession(activeSession, minutes);
+    } catch (error) {
+        setTimerMessage(error.message, true);
+        return;
+    }
+
+    if (target === "study") {
+        setStudyDurationInputs(activeSession.studyDurationSeconds);
+        saveTimerSettings(auth.currentUser?.uid, {
+            studyDurationSeconds: activeSession.studyDurationSeconds,
+            breakIntervalSeconds: activeSession.breakIntervalSeconds,
+            breakDurationSeconds: activeSession.breakDurationSeconds
+        });
+        setTimerMessage(`${minutes} minute${minutes === 1 ? "" : "s"} added to the study countdown.`);
+    } else {
+        setTimerMessage(`${minutes} minute${minutes === 1 ? "" : "s"} added to this break.`);
+    }
+
+    saveLocalSession();
+    updateTimerDisplay();
+    renderTimerControls();
+}
+
 function pauseStudySession() {
     if (!activeSession || activeSession.status !== "running") return;
 
-    activeSession.elapsedBeforePauseMs = getElapsedMilliseconds(activeSession);
-    activeSession.pauseStartedAtMs = Date.now();
+    const now = Date.now();
+    const wasBreakDue = Boolean(activeSession.breakDue);
+    advanceManualTimer(activeSession, now);
+    if (activeSession.status !== "running") {
+        updateTimerDisplay();
+        return;
+    }
+    activeSession.phaseElapsedBeforePauseMs = getPhaseElapsedMilliseconds(activeSession, now);
+    activeSession.phaseStartedAtMs = null;
+    activeSession.pauseStartedAtMs = now;
     activeSession.status = "paused";
 
     stopTimerTicker();
     saveLocalSession();
     renderTimerControls();
     updateTimerDisplay();
-    setTimerMessage("Session paused. Resume when you're ready.");
+    setTimerMessage(!wasBreakDue && activeSession.breakDue
+        ? "It's time for a break. Resume, then start the break when ready."
+        : "Session paused. Resume when you're ready.");
 }
 
 function resumeStudySession() {
     if (!activeSession || activeSession.status !== "paused") return;
 
     const now = Date.now();
-    activeSession.pausedTotalMs += Math.max(0, now - activeSession.pauseStartedAtMs);
+    const pauseStartedAtMs = Number(activeSession.pauseStartedAtMs);
+    if (pauseStartedAtMs > 0) {
+        activeSession.pausedTotalMs = (Number(activeSession.pausedTotalMs) || 0) +
+            Math.max(0, now - pauseStartedAtMs);
+    }
     activeSession.pauseStartedAtMs = null;
-    activeSession.segmentStartedAtMs = now;
+    activeSession.phaseStartedAtMs = now;
     activeSession.status = "running";
 
     saveLocalSession();
     renderTimerControls();
-    setTimerMessage("You're back. Keep going!");
+    setTimerMessage(activeSession.phase === "break"
+        ? "Break resumed. Study time remains paused."
+        : "You're back. Keep going!");
     startTimerTicker();
 }
 
-async function finishStudySession(autoFinished = false) {
+async function finishStudySession() {
     if (!activeSession || finishingSession) return;
 
     const session = activeSession;
     const user = auth.currentUser;
     if (!user || session.status === "saving") return;
 
+    const now = Date.now();
+    if (session.status === "running") advanceManualTimer(session, now);
     finishingSession = true;
     session.statusBeforeSaving = session.status;
-    const elapsedSeconds = Math.max(0, Math.floor(getElapsedMilliseconds(session) / 1000));
+    const elapsedSeconds = Math.max(0, Math.floor(getStudyElapsedMilliseconds(session, now) / 1000));
     const pausedSeconds = Math.max(0, Math.floor(getPausedMilliseconds(session) / 1000));
 
     if (elapsedSeconds < 1) {
@@ -1248,6 +1653,10 @@ async function finishStudySession(autoFinished = false) {
         return;
     }
 
+    if (session.status === "running") {
+        session.phaseElapsedBeforePauseMs = getPhaseElapsedMilliseconds(session, now);
+        session.phaseStartedAtMs = null;
+    }
     session.status = "saving";
     stopTimerTicker();
     renderTimerControls();
@@ -1258,6 +1667,7 @@ async function finishStudySession(autoFinished = false) {
             endedAt: serverTimestamp(),
             status: "completed",
             durationSeconds: elapsedSeconds,
+            plannedSeconds: session.mode === "countdown" ? session.plannedSeconds : 0,
             pausedSeconds
         });
 
@@ -1266,12 +1676,11 @@ async function finishStudySession(autoFinished = false) {
         finishingSession = false;
         renderTimerControls();
         timerState.textContent = "SESSION COMPLETED";
+        studyTimerSection.classList.remove("is-break");
         timerDisplay.textContent = formatDuration(elapsedSeconds);
         timerProgress.style.setProperty("--progress", "100%");
         timerModeCaption.textContent = "COMPLETED STUDY TIME";
-        setTimerMessage(
-            `${autoFinished ? "Countdown completed!" : "Session finished!"} Saved ${formatStudyTotal(elapsedSeconds)} to your account.`
-        );
+        setTimerMessage(`Session finished. Saved ${formatStudyTotal(elapsedSeconds)} of study time; breaks were excluded.`);
 
         await loadStudyStats(user.uid);
         await loadCommunityFeatures(user.uid);
@@ -1282,6 +1691,7 @@ async function finishStudySession(autoFinished = false) {
     } catch (error) {
         console.error("Could not finish study session:", error);
         session.status = session.statusBeforeSaving || "running";
+        if (session.status === "running") session.phaseStartedAtMs = Date.now();
         activeSession = session;
         finishingSession = false;
         saveLocalSession();
@@ -1313,6 +1723,7 @@ async function resetStudySession() {
 }
 
 async function restoreStudySession(uid) {
+    loadTimerSettings(uid);
     const raw = localStorage.getItem(getTimerStorageKey(uid));
     if (!raw) {
         activeSession = null;
@@ -1336,21 +1747,123 @@ async function restoreStudySession(uid) {
             return;
         }
 
+        const now = Date.now();
+        const hasManualTimerState = ["study", "break"].includes(saved.phase) &&
+            Number.isInteger(Number(saved.studyDurationSeconds)) &&
+            Number(saved.studyDurationSeconds) >= 1 && Number(saved.studyDurationSeconds) <= 86400 &&
+            Number.isInteger(Number(saved.breakIntervalSeconds)) &&
+            Number(saved.breakIntervalSeconds) >= 60 && Number(saved.breakIntervalSeconds) <= 86400 &&
+            Number(saved.breakIntervalSeconds) % 60 === 0 &&
+            Number.isInteger(Number(saved.breakDurationSeconds)) &&
+            Number(saved.breakDurationSeconds) >= 60 && Number(saved.breakDurationSeconds) <= 86400 &&
+            Number(saved.breakDurationSeconds) % 60 === 0 &&
+            Number.isFinite(Number(saved.phaseElapsedBeforePauseMs)) &&
+            Number(saved.phaseElapsedBeforePauseMs) >= 0 &&
+            Number.isFinite(Number(saved.completedStudyMs)) &&
+            Number.isFinite(Number(saved.studySinceBreakMs)) &&
+            Number(saved.studySinceBreakMs) >= 0 &&
+            Number.isFinite(Number(saved.breakExtraSeconds)) &&
+            Number(saved.breakExtraSeconds) >= 0 &&
+            ["running", "paused", "break-finished", "completed", "saving"].includes(saved.status);
+        if (!hasManualTimerState) {
+            const hasPreviousPomodoroState = ["study", "break"].includes(saved.phase) &&
+                Number.isFinite(Number(saved.phaseElapsedBeforePauseMs)) &&
+                Number.isFinite(Number(saved.completedStudyMs));
+            const legacyElapsedMs = Math.max(0, Number(saved.elapsedBeforePauseMs) || 0) +
+                (saved.status === "paused" ? 0 : Math.max(0, now - (Number(saved.segmentStartedAtMs) || now)));
+            let settings;
+            try {
+                settings = getTimerSettings();
+            } catch (error) {
+                console.warn("Invalid saved break settings; using defaults:", error);
+                settings = { studyDurationSeconds: 3600, breakIntervalSeconds: 3600, breakDurationSeconds: 300 };
+                setStudyDurationInputs(settings.studyDurationSeconds);
+                setBreakIntervalInputs(settings.breakIntervalSeconds);
+                timerBreakMinutesInput.value = "5";
+            }
+            if (hasPreviousPomodoroState) {
+                const oldPhaseElapsedMs = Math.max(0, Number(saved.phaseElapsedBeforePauseMs) || 0) +
+                    (saved.status === "paused" ? 0 : Math.max(0, now - (Number(saved.phaseStartedAtMs) || now)));
+                const completedStudyMs = Math.max(0, Number(saved.completedStudyMs) || 0);
+                const oldFocusBlockSeconds = Math.max(1, Number(saved.studyDurationSeconds) || settings.studyDurationSeconds);
+                saved.phaseElapsedBeforePauseMs = oldPhaseElapsedMs;
+                saved.completedStudyMs = completedStudyMs;
+                saved.studyDurationSeconds = saved.mode === "countdown"
+                    ? Math.min(86400, Math.max(settings.studyDurationSeconds,
+                        Math.ceil(completedStudyMs / 1000) + oldFocusBlockSeconds))
+                    : settings.studyDurationSeconds;
+                saved.studySinceBreakMs = 0;
+                saved.breakDue = saved.phase === "study" &&
+                    oldPhaseElapsedMs >= settings.breakIntervalSeconds * 1000;
+                saved.phaseStartedAtMs = saved.status === "paused" ? null : Number(saved.phaseStartedAtMs) || now;
+            } else {
+                saved.phase = "study";
+                saved.completedStudyMs = saved.mode === "stopwatch" ? legacyElapsedMs : 0;
+                saved.phaseElapsedBeforePauseMs = saved.mode === "countdown" ? legacyElapsedMs : 0;
+                saved.studyDurationSeconds = saved.mode === "countdown"
+                    ? Math.max(1, Math.min(86400, Number(saved.plannedSeconds) || settings.studyDurationSeconds))
+                    : settings.studyDurationSeconds;
+                saved.studySinceBreakMs = saved.mode === "stopwatch" ? legacyElapsedMs : 0;
+                saved.phaseStartedAtMs = saved.status === "paused"
+                    ? null
+                    : saved.mode === "countdown" ? now - legacyElapsedMs : now;
+                saved.breakDue = saved.studySinceBreakMs >= settings.breakIntervalSeconds * 1000;
+            }
+            saved.breakIntervalSeconds = settings.breakIntervalSeconds;
+            saved.breakDurationSeconds = settings.breakDurationSeconds;
+            saved.breakExtraSeconds = 0;
+            saved.pausedTotalMs = Math.max(0, Number(saved.pausedTotalMs) || 0);
+            saved.pauseStartedAtMs = saved.status === "paused" ? saved.pauseStartedAtMs || now : null;
+            saved.status = saved.status === "paused" ? "paused" : "running";
+            if (saved.mode === "countdown") saved.plannedSeconds = saved.studyDurationSeconds;
+            setStudyDurationInputs(saved.studyDurationSeconds);
+            setBreakIntervalInputs(saved.breakIntervalSeconds);
+            timerBreakMinutesInput.value = String(saved.breakDurationSeconds / 60);
+        } else {
+            saved.studyDurationSeconds = Number(saved.studyDurationSeconds);
+            saved.breakIntervalSeconds = Number(saved.breakIntervalSeconds);
+            saved.breakDurationSeconds = Number(saved.breakDurationSeconds);
+            saved.phaseElapsedBeforePauseMs = Math.max(0, Number(saved.phaseElapsedBeforePauseMs));
+            saved.completedStudyMs = Math.max(0, Number(saved.completedStudyMs));
+            saved.studySinceBreakMs = Math.max(0, Number(saved.studySinceBreakMs));
+            saved.breakExtraSeconds = Math.max(0, Number(saved.breakExtraSeconds));
+            saved.pausedTotalMs = Math.max(0, Number(saved.pausedTotalMs) || 0);
+            if (saved.status === "saving") saved.status = "running";
+            if (saved.status === "running" && !(Number(saved.phaseStartedAtMs) > 0)) saved.phaseStartedAtMs = now;
+            if (saved.status !== "running") saved.phaseStartedAtMs = null;
+            setStudyDurationInputs(saved.studyDurationSeconds);
+            setBreakIntervalInputs(saved.breakIntervalSeconds);
+            timerBreakMinutesInput.value = String(saved.breakDurationSeconds / 60);
+        }
+
         activeSession = saved;
         timerMode = saved.mode;
+        saveTimerSettings(uid, {
+            studyDurationSeconds: saved.studyDurationSeconds,
+            breakIntervalSeconds: saved.breakIntervalSeconds,
+            breakDurationSeconds: saved.breakDurationSeconds
+        });
         countdownModeBtn.classList.toggle("active", timerMode === "countdown");
         stopwatchModeBtn.classList.toggle("active", timerMode === "stopwatch");
-        timerSetup.hidden = timerMode !== "countdown";
-        timerModeCaption.textContent = timerMode === "countdown" ? "COUNTDOWN SESSION" : "STOPWATCH SESSION";
+        timerSetup.hidden = false;
 
         if (activeSession.status === "running") {
-            // If the page was refreshed while running, the current running segment continues.
             startTimerTicker();
-            setTimerMessage("Your previous study session has been restored.");
+            if (activeSession.status === "running" && activeSession.breakDue) {
+                setTimerMessage("It's time for a break. Your study timer is still running; start the break when ready.");
+            } else if (activeSession.status === "running") {
+                setTimerMessage("Your previous study session has been restored.");
+            }
         } else {
             renderTimerControls();
             updateTimerDisplay();
-            setTimerMessage("Your paused study session has been restored.");
+            if (activeSession.status === "paused") {
+                setTimerMessage("Your paused study session has been restored.");
+            } else if (activeSession.status === "break-finished") {
+                setTimerMessage("Break finished. Start studying when you're ready.");
+            } else if (activeSession.status === "completed") {
+                setTimerMessage("Study duration complete. Finish the session to save your study time.");
+            }
         }
         renderTimerControls();
     } catch (error) {
@@ -1712,6 +2225,39 @@ const timerFullscreenBtn = document.getElementById("timerExpandBtn");
 const timerFullscreenExitBtn = document.getElementById("timerFullscreenExitBtn");
 const studyTimerSection = document.getElementById("studyTimer");
 let screenWakeLock = null;
+let fullscreenTouchY = null;
+
+if (studyTimerSection) {
+    studyTimerSection.addEventListener("touchstart", event => {
+        fullscreenTouchY = document.fullscreenElement === studyTimerSection && event.touches.length === 1
+            ? event.touches[0].clientY
+            : null;
+    }, { passive: true });
+
+    studyTimerSection.addEventListener("touchmove", event => {
+        if (document.fullscreenElement !== studyTimerSection || fullscreenTouchY === null || event.touches.length !== 1) return;
+
+        const currentY = event.touches[0].clientY;
+        const scrollDelta = fullscreenTouchY - currentY;
+        fullscreenTouchY = currentY;
+        if (!scrollDelta || !event.cancelable) return;
+
+        const maxScroll = studyTimerSection.scrollHeight - studyTimerSection.clientHeight;
+        const nextScrollTop = Math.max(0, Math.min(maxScroll, studyTimerSection.scrollTop + scrollDelta));
+        if (nextScrollTop !== studyTimerSection.scrollTop) {
+            studyTimerSection.scrollTop = nextScrollTop;
+            event.preventDefault();
+        }
+    }, { passive: false });
+
+    studyTimerSection.addEventListener("touchend", () => {
+        fullscreenTouchY = null;
+    }, { passive: true });
+
+    studyTimerSection.addEventListener("touchcancel", () => {
+        fullscreenTouchY = null;
+    }, { passive: true });
+}
 
 function isClockFullscreen() {
     return document.fullscreenElement === studyTimerSection ||
@@ -1857,6 +2403,7 @@ document.addEventListener("fullscreenchange", () => {
 });
 
 document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && activeSession?.status === "running") updateTimerDisplay();
     if (!document.hidden && isClockFullscreen()) {
         keepScreenAwake();
     }
@@ -2206,29 +2753,27 @@ document.getElementById("addTodoBtn")?.addEventListener("click", addTodo);
 
 countdownModeBtn.addEventListener("click", () => setTimerMode("countdown"));
 stopwatchModeBtn.addEventListener("click", () => setTimerMode("stopwatch"));
-timerHoursInput.addEventListener("input", () => {
-    if (!activeSession && timerMode === "countdown") {
-        try { timerDisplay.textContent = formatDuration(getSelectedCountdownSeconds()); }
-        catch { timerDisplay.textContent = "00:00:00"; }
-    }
-});
-timerMinutesInput.addEventListener("input", () => {
-    if (!activeSession && timerMode === "countdown") {
-        try { timerDisplay.textContent = formatDuration(getSelectedCountdownSeconds()); }
-        catch { timerDisplay.textContent = "00:00:00"; }
-    }
-});
-timerSecondsInput.addEventListener("input", () => {
-    if (!activeSession && timerMode === "countdown") {
-        try { timerDisplay.textContent = formatDuration(getSelectedCountdownSeconds()); }
-        catch { timerDisplay.textContent = "00:00:00"; }
-    }
+[timerHoursInput, timerMinutesInput, timerSecondsInput, timerBreakIntervalHoursInput,
+    timerBreakIntervalMinutesInput, timerBreakMinutesInput].forEach(input => {
+    input.addEventListener("input", () => {
+        if (activeSession || timerMode !== "countdown") return;
+        try {
+            timerDisplay.textContent = formatDuration(getSelectedCountdownSeconds());
+        } catch {
+            timerDisplay.textContent = "00:00:00";
+        }
+    });
+    input.addEventListener("change", applyTimerSettings);
 });
 timerStartBtn.addEventListener("click", startStudySession);
 timerPauseBtn.addEventListener("click", pauseStudySession);
 timerResumeBtn.addEventListener("click", resumeStudySession);
-timerFinishBtn.addEventListener("click", () => finishStudySession(false));
+timerFinishBtn.addEventListener("click", () => finishStudySession());
 timerResetBtn.addEventListener("click", resetStudySession);
+timerStartBreakBtn.addEventListener("click", startManualBreak);
+timerStartStudyBtn.addEventListener("click", startManualStudy);
+timerAddTimeSelect.addEventListener("change", renderTimerControls);
+timerAddTimeBtn.addEventListener("click", addSelectedTime);
 
 
 /* RESTORE AUTH SESSION */

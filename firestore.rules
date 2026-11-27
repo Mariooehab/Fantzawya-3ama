@@ -108,11 +108,13 @@ service cloud.firestore {
         && request.resource.data.startedAt == request.time && request.resource.data.status == 'active'
         && request.resource.data.pausedSeconds == 0 && request.resource.data.durationSeconds == 0;
       allow update: if signedIn() && resource.data.uid == request.auth.uid && resource.data.status == 'active'
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['endedAt','status','durationSeconds','pausedSeconds'])
-        && request.resource.data.keys().hasAll(['endedAt','status','durationSeconds','pausedSeconds'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['endedAt','status','durationSeconds','pausedSeconds','plannedSeconds'])
+        && request.resource.data.keys().hasAll(['endedAt','status','durationSeconds','pausedSeconds','plannedSeconds'])
         && request.resource.data.endedAt == request.time && request.resource.data.status == 'completed'
         && request.resource.data.durationSeconds is int && request.resource.data.durationSeconds >= 1 && request.resource.data.durationSeconds <= 604800
         && request.resource.data.pausedSeconds is int && request.resource.data.pausedSeconds >= 0 && request.resource.data.pausedSeconds <= 604800
+        && request.resource.data.plannedSeconds is int && request.resource.data.plannedSeconds >= 0 && request.resource.data.plannedSeconds <= 86400
+        && ((request.resource.data.mode == 'countdown' && request.resource.data.plannedSeconds >= 1) || (request.resource.data.mode == 'stopwatch' && request.resource.data.plannedSeconds == 0))
         && request.time > resource.data.startedAt;
       allow delete: if signedIn() && resource.data.uid == request.auth.uid && resource.data.status == 'completed';
     }

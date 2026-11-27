@@ -124,22 +124,40 @@
 </button>
 </div>
 <div class="timer-setup" id="timerSetup">
-<label for="timerHours">Study duration</label>
+<div class="timer-settings-grid">
+<div class="timer-setting-group">
+<label for="timerHours">Total study time</label>
 <div class="duration-inputs">
-<div><input id="timerHours" inputmode="numeric" max="24" min="0" type="number" value="1"/><small>HOURS</small></div>
+<div><input id="timerHours" inputmode="numeric" max="24" min="0" type="number" value="1" aria-label="Study hours"/><small>HOURS</small></div>
 <span>:</span>
-<div><input id="timerMinutes" inputmode="numeric" max="59" min="0" type="number" value="0"/><small>MINUTES</small></div>
+<div><input id="timerMinutes" inputmode="numeric" max="59" min="0" type="number" value="0" aria-label="Study minutes"/><small>MINUTES</small></div>
 <span>:</span>
-<div><input id="timerSeconds" inputmode="numeric" max="59" min="0" type="number" value="0"/><small>SECONDS</small></div>
+<div><input id="timerSeconds" inputmode="numeric" max="59" min="0" type="number" value="0" aria-label="Study seconds"/><small>SECONDS</small></div>
 </div>
-<p class="timer-hint">Choose from 1 minute up to 24 hours.</p>
+</div>
+<div class="timer-setting-group">
+<label for="timerBreakIntervalHours">Break interval</label>
+<div class="duration-inputs">
+<div><input id="timerBreakIntervalHours" inputmode="numeric" max="24" min="0" type="number" value="1" aria-label="Hours of study between breaks"/><small>HOURS</small></div>
+<span>:</span>
+<div><input id="timerBreakIntervalMinutes" inputmode="numeric" max="59" min="0" type="number" value="0" aria-label="Minutes of study between breaks"/><small>MINUTES</small></div>
+</div>
+</div>
+<div class="timer-setting-group">
+<label for="timerBreakMinutes">Break duration</label>
+<div class="duration-inputs break-duration-input">
+<div><input id="timerBreakMinutes" inputmode="numeric" max="1440" min="1" type="number" value="5" aria-label="Break duration in minutes"/><small>MINUTES</small></div>
+</div>
+</div>
+</div>
+<p class="timer-hint">Breaks start only when you choose. Break time is excluded from study time.</p>
 </div>
 <div class="timer-clock-wrap" id="timerClockPanel">
 <div class="timer-progress" id="timerProgress">
 <div class="timer-clock">
 <span class="timer-state" id="timerState">READY TO FOCUS</span>
 <strong id="timerDisplay">01:00:00</strong>
-<span class="timer-mode-caption" id="timerModeCaption">COUNTDOWN SESSION</span>
+<span class="timer-mode-caption" id="timerModeCaption">COUNTDOWN • STUDY</span>
 </div>
 </div>
 <button class="study-fullscreen-exit timer-fullscreen-exit" id="timerFullscreenExitBtn" type="button"><i class="fas fa-compress"></i> EXIT FULL SCREEN</button>
@@ -150,6 +168,20 @@
 <button class="timer-control-btn" hidden="" id="timerResumeBtn" type="button">▶ RESUME</button>
 <button class="timer-finish-btn" hidden="" id="timerFinishBtn" type="button">FINISH SESSION</button>
 <button class="timer-reset-btn" hidden="" id="timerResetBtn" type="button">RESET</button>
+<button class="timer-break-btn" hidden="" id="timerStartBreakBtn" type="button">☕ START BREAK</button>
+<button class="timer-study-btn" hidden="" id="timerStartStudyBtn" type="button">▶ START STUDY</button>
+<div class="timer-add-time-control" hidden="" id="timerAddTimeControl">
+<select aria-label="Time to add" id="timerAddTimeSelect">
+<option value="1">1 min</option>
+<option value="5">5 min</option>
+<option value="10">10 min</option>
+<option value="15">15 min</option>
+<option value="30">30 min</option>
+<option value="custom">Custom</option>
+</select>
+<input id="timerAddTimeCustom" type="number" min="1" max="1440" step="1" value="1" inputmode="numeric" aria-label="Custom time to add in minutes" hidden=""/>
+<button class="timer-add-time-btn" id="timerAddTimeBtn" type="button">+ TIME</button>
+</div>
 </div>
 <p aria-live="polite" class="timer-message" id="timerMessage" role="status">Your completed sessions will be saved to your account.</p>
 </section></section><section class="app-page" data-page="exams" id="page-exams">

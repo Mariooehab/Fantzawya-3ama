@@ -156,8 +156,12 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
 .timer-mode-btn strong { color:#eee; font-size:13px; }
 .timer-mode-btn small { margin-top:3px; color:var(--muted); font-size:10px; }
 .timer-mode-btn.active { border-color:rgba(167,139,250,.55); background:rgba(139,92,246,.13); box-shadow:0 0 0 2px rgba(139,92,246,.06); }
-.timer-setup { width:min(100%,440px); margin:0 auto 12px; text-align:center; }
-.timer-setup label { margin:0 0 10px; color:#d5d5e5; }
+.timer-setup { width:min(100%,760px); margin:0 auto 12px; text-align:center; }
+.timer-settings-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.timer-setting-group { min-width:0; padding:13px; border:1px solid rgba(139,92,246,.16); border-radius:12px; background:rgba(255,255,255,.025); }
+.timer-setting-group label { margin:0 0 10px; color:#d5d5e5; font-size:12px; font-weight:700; }
+.timer-setting-group .duration-inputs > div { flex:1 1 0; width:auto; min-width:0; }
+.timer-setting-group .break-duration-input > div { flex:0 1 160px; width:min(100%,160px); }
 .duration-inputs { display:flex; justify-content:center; align-items:center; gap:8px; }
 .duration-inputs > div { width:min(29%,105px); }
 .duration-inputs input { width:100%; min-width:0; height:48px; padding:0 5px; border-color:rgba(139,92,246,.25); background:rgba(255,255,255,.04); text-align:center; font-size:21px; font-weight:800; font-variant-numeric:tabular-nums; }
@@ -165,8 +169,11 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
 .duration-inputs > span { color:#a78bfa; font-size:23px; font-weight:800; }
 .timer-hint { margin-top:9px; color:#777790; font-size:10px; }
 .timer-clock-wrap { display:flex; justify-content:center; padding:8px 0 17px; }
-.timer-progress { --progress:0%; position:relative; box-sizing:border-box; width:min(100%,540px); min-height:190px; display:flex; align-items:center; justify-content:center; overflow:hidden; padding:22px; border:1px solid rgba(157,125,255,.2); border-radius:18px; background:radial-gradient(ellipse at center,rgba(124,91,220,.17),rgba(11,13,29,.3) 70%); box-shadow:0 0 30px rgba(139,92,246,.08); }
-.timer-progress::after { position:absolute; right:18px; bottom:0; left:18px; height:3px; border-radius:3px; background:linear-gradient(to right,#9b75ff var(--progress),rgba(255,255,255,.07) var(--progress)); content:""; }
+.timer-progress { --progress:0%; --timer-phase-color:#9b75ff; position:relative; box-sizing:border-box; width:min(100%,540px); min-height:190px; display:flex; align-items:center; justify-content:center; overflow:hidden; padding:22px; border:1px solid rgba(157,125,255,.2); border-radius:18px; background:radial-gradient(ellipse at center,rgba(124,91,220,.17),rgba(11,13,29,.3) 70%); box-shadow:0 0 30px rgba(139,92,246,.08); }
+.timer-progress::after { position:absolute; right:18px; bottom:0; left:18px; height:3px; border-radius:3px; background:linear-gradient(to right,var(--timer-phase-color) var(--progress),rgba(255,255,255,.07) var(--progress)); content:""; }
+.study-timer-section.is-break .timer-progress { --timer-phase-color:#f6ad55; border-color:rgba(246,173,85,.35); background:radial-gradient(ellipse at center,rgba(246,173,85,.14),rgba(11,13,29,.3) 70%); }
+.study-timer-section.is-break .timer-state,
+.study-timer-section.is-break .timer-mode-caption { color:#f6c56f; }
 .timer-clock { width:100%; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; }
 .timer-state { color:#b8a7ed; font-size:10px; font-weight:800; letter-spacing:2px; }
 .timer-clock strong { margin:8px 0; color:#fff; font-size:clamp(38px,7vw,68px); font-weight:800; font-variant-numeric:tabular-nums; letter-spacing:3px; text-shadow:0 0 30px rgba(155,123,255,.25); }
@@ -178,6 +185,14 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
 .timer-control-btn { background:#30204f; border-color:rgba(167,139,250,.2)!important; }
 .timer-finish-btn { background:rgba(16,185,129,.14); border-color:rgba(52,211,153,.25)!important; color:#6ee7b7!important; }
 .timer-reset-btn { background:rgba(255,255,255,.045); border-color:var(--border)!important; color:#b9b9cc!important; }
+.timer-break-btn { background:rgba(246,173,85,.15); border-color:rgba(246,173,85,.35)!important; color:#f6c56f!important; }
+.timer-study-btn { background:rgba(16,185,129,.15); border-color:rgba(52,211,153,.3)!important; color:#6ee7b7!important; }
+.timer-add-time-control { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:6px; }
+.timer-add-time-control[hidden] { display:none; }
+.timer-add-time-control select,
+.timer-add-time-control input { min-height:42px; max-width:110px; padding:0 10px; border:1px solid rgba(167,139,250,.25); border-radius:9px; background:#17152a; color:#eee; font:inherit; font-size:11px; font-weight:700; }
+.timer-add-time-control input { width:82px; text-align:center; }
+.timer-add-time-btn { background:rgba(99,102,241,.2); border-color:rgba(129,140,248,.35)!important; }
 .timer-message { min-height:18px; margin-top:14px; color:#a78bfa; text-align:center; font-size:11px; line-height:1.5; }
 .timer-message.error { color:#ff7b91; }
 
@@ -189,6 +204,9 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
     .stat-label { font-size:9px; }
     .quick-card { flex-wrap:wrap; }
     .coming-soon { width:100%; margin-left:56px; }
+}
+@media (max-width:900px) {
+    .timer-settings-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 @media (max-width:760px) {
     html { scroll-padding-top:20px; }
@@ -226,6 +244,7 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
     .mobile-nav-link.active { color:#e4d8ff; border-color:rgba(167,139,250,.28); background:rgba(139,92,246,.17); }
     .mobile-logout-link { color:#ff9bb0; }
     .study-timer-section { padding:20px 15px; }
+    .timer-settings-grid { grid-template-columns:1fr; }
 }
 @media (max-width:480px) {
     .auth-container { padding:15px; }
@@ -266,6 +285,8 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
     .timer-mode-btn > span { width:28px; height:28px; font-size:16px; }
     .timer-mode-btn strong { font-size:11px; }
     .timer-mode-btn small { font-size:8px; }
+    .timer-settings-grid { gap:8px; }
+    .timer-setting-group { padding:10px; }
     .timer-progress { min-height:170px; padding:18px 14px; }
     .timer-clock strong { font-size:clamp(34px,8vw,52px); letter-spacing:2px; }
     .timer-controls { gap:7px; }
@@ -960,6 +981,12 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
   .study-timer-section:fullscreen .timer-mode-btn strong { font-size:11px; }
   .study-timer-section:fullscreen .timer-mode-btn small { margin-top:1px; font-size:8px; }
   .study-timer-section:fullscreen .timer-setup { margin:2px auto; }
+  .study-timer-section:fullscreen .timer-settings-grid { gap:6px; }
+  .study-timer-section:fullscreen .timer-setting-group { padding:7px 5px; }
+  .study-timer-section:fullscreen .timer-setting-group label { margin-bottom:4px; font-size:10px; }
+  .study-timer-section:fullscreen .timer-setting-group .duration-inputs > div { flex:1 1 0; width:auto; }
+  .study-timer-section:fullscreen .timer-setting-group .break-duration-input > div { flex:0 1 160px; width:min(100%,160px); }
+  .study-timer-section:fullscreen .timer-setting-group .duration-inputs input { height:32px; font-size:15px; }
   .study-timer-section:fullscreen .timer-setup label { margin-bottom:4px; }
   .study-timer-section:fullscreen .duration-inputs { gap:5px; }
   .study-timer-section:fullscreen .duration-inputs > div { width:min(29%,90px); }
