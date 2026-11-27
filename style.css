@@ -528,3 +528,68 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
 .site-modal-cancel { border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.06); color:#d7d3e7; }
 .site-modal-confirm { border:1px solid rgba(248,113,145,.25); background:linear-gradient(120deg,#a83c69,#e05278); color:white; }
 @keyframes siteModalFade { from {opacity:0} to {opacity:1} }
+
+/* TABLET SIDEBAR - FIX VERTICAL SCROLL */
+@media (min-width: 761px) and (max-width: 1100px) {
+
+    .sidebar {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        bottom: 0 !important;
+
+        width: 220px !important;
+        height: 100vh !important;
+        height: 100dvh !important;
+
+        display: flex !important;
+        flex-direction: column !important;
+
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+
+        min-height: 0 !important;
+        overscroll-behavior-y: contain;
+        -webkit-overflow-scrolling: touch;
+
+        scrollbar-width: thin;
+        scrollbar-color: rgba(167,139,250,.5) transparent;
+    }
+
+    /* Prevent sidebar elements from shrinking */
+    .sidebar > *,
+    .sidebar .brand,
+    .sidebar .sidebar-label,
+    .sidebar .side-nav,
+    .sidebar .sidebar-bottom {
+        flex-shrink: 0 !important;
+    }
+
+    .sidebar .side-nav {
+        display: grid !important;
+        gap: 8px;
+    }
+
+    .sidebar .sidebar-bottom {
+        margin-top: 20px !important;
+        padding-bottom: 20px !important;
+    }
+
+    /* Scrollbar design */
+    .sidebar::-webkit-scrollbar {
+        width: 6px;
+    }
+
+    .sidebar::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .sidebar::-webkit-scrollbar-thumb {
+        background: rgba(167,139,250,.4);
+        border-radius: 20px;
+    }
+
+    .sidebar::-webkit-scrollbar-thumb:hover {
+        background: rgba(167,139,250,.75);
+    }
+}
