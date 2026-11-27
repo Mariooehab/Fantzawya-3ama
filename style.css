@@ -562,3 +562,67 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
 .owner-welcome-status { min-height:15px; margin:10px 0 0; color:#e8d08c; font-size:10px; }
 @keyframes ownerWelcomeIn { from { opacity:0; transform:translateY(14px) scale(.97); } to { opacity:1; transform:translateY(0) scale(1); } }
 @media(max-width:480px) { .owner-welcome-card { padding-right:19px; padding-left:19px; } .owner-welcome-cover { margin-right:-19px; margin-left:-19px; } }
+
+
+/* OWNER BADGE — responsive across phones and tablets */
+.owner-tag {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+}
+#sidebarUsername .owner-tag,
+#topbarUsername .owner-tag,
+#profileUsername .owner-tag {
+    margin: 4px 0 0 6px;
+}
+#profileUsername .owner-tag {
+    display: inline-flex !important;
+}
+.friend-identity-text,
+.friend-identity-text strong,
+#friendProfileName {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+    .owner-tag {
+        display: inline-flex !important;
+        font-size: 9px !important;
+        padding: 3px 6px !important;
+        letter-spacing: .2px !important;
+        white-space: normal !important;
+        line-height: 1.35 !important;
+    }
+    .owner-tag-large {
+        display: table !important;
+        width: fit-content;
+        max-width: calc(100vw - 64px);
+        margin: 8px auto 0 !important;
+        text-align: center;
+    }
+    .friend-profile-row .friend-identity-text strong {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+    }
+    #page-profile .profile-name {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: center;
+        gap: 5px;
+    }
+    #sidebarUsername .owner-tag, #topbarUsername .owner-tag {
+        margin-left: 4px;
+    }
+}
+@media (max-width: 380px) {
+    .owner-tag { font-size: 8px !important; padding: 3px 5px !important; }
+}

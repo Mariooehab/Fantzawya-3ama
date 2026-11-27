@@ -262,7 +262,10 @@ async function loadDashboard(user, options = {}) {
         document.getElementById("profileEmail").textContent = email;
         ["sidebarUsername", "topbarUsername", "profileUsername"].forEach(id => {
             const el = document.getElementById(id);
-            if (el) el.classList.toggle("is-site-owner", isOwnerAccount(user));
+            if (!el) return;
+            el.classList.toggle("is-site-owner", isOwnerAccount(user));
+            if (isOwnerAccount(user)) addOwnerTag(el, "owner-tag");
+            else el.querySelectorAll(".owner-tag").forEach(tag => tag.remove());
         });
         const profileBadge = document.querySelector(".profile-badge");
         if (profileBadge) {
@@ -455,7 +458,7 @@ function ensureOwnerWelcomeModal() {
         <h2 id="ownerWelcomeHeading">Meet the Owner</h2>
         <h3 id="ownerWelcomeName">Website Owner</h3>
         <div class="owner-welcome-tag" id="ownerWelcomeTag">👑 WEBSITE OWNER & MAKER</div>
-        <p class="owner-welcome-copy"We'd love to introduce you to the person who founded and develops Fantzawya. You can send him a friend request and connect with him directly within the community.</p>
+        <p class="owner-welcome-copy">حابب تعرفك على الشخص اللي أسّس Fantzawya وبيطوّرها. تقدر تبعتله طلب صداقة وتتواصلوا من داخل المجتمع.</p>
         <div class="owner-welcome-actions">
           <button type="button" class="owner-welcome-add" id="ownerWelcomeAdd">ADD OWNER</button>
           <button type="button" class="owner-welcome-skip" id="ownerWelcomeSkip">Maybe later</button>
