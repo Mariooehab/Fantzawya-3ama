@@ -1,0 +1,13 @@
+name = "fantzawya-ai"
+main = "src/index.js"
+compatibility_date = "2026-11-27"
+
+[vars]
+# Keep your existing Firebase Web API key here.
+FIREBASE_API_KEY = "AIzaSyB4zieQ_WZvmN7FSvoHRqS94amvdVB80Ss"
+GEMINI_MODEL = "gemini-3.8-flash"
+GROQ_MODEL = "openai/gpt-oss-20b"
+CF_AI_MODEL = "@cf/meta/llama-3.2-3b-instruct"
+
+[ai]
+binding = "AI"

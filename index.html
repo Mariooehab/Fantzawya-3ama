@@ -61,6 +61,9 @@
 <a class="nav-link" data-page="league" href="#league"><span>🏆</span> League</a>
 <a class="nav-link" data-page="todo" href="#todo"><span>☑</span> To-do & Notes</a>
 <a class="nav-link" data-page="profile" href="#profile"><span>◉</span> My Profile</a>
+<button class="nav-link fai-desktop-link" id="faiDesktopLauncher" type="button">
+    <span>✦</span> Fantzawya AI
+</button>
 </nav>
 <div class="sidebar-bottom">
 <div class="sidebar-user">
@@ -111,7 +114,7 @@
 <h3>Study Timer</h3>
 <p>Choose your mode, focus, and save your completed study time.</p>
 </div>
-<span class="timer-heading-icon">◴</span>
+<div class="timer-heading-actions"><button class="timer-expand-btn" id="timerExpandBtn" type="button" aria-expanded="false" aria-label="Expand timer">⛶ <span>تكبير</span></button><span class="timer-heading-icon">◴</span></div>
 </div>
 <div class="timer-mode-switch">
 <button class="timer-mode-btn active" data-mode="countdown" id="countdownModeBtn" type="button">
@@ -291,6 +294,10 @@
 <a class="mobile-nav-link" data-page="todo" href="#todo"><span>☑</span><small>Tasks</small></a>
 <a class="mobile-nav-link" data-page="profile" href="#profile"><span>◉</span><small>Profile</small></a>
 <button class="mobile-nav-link mobile-logout-link" id="mobileLogoutBtn" type="button"><span>↪</span><small>Logout</small></button>
+<button class="mobile-nav-link fai-nav-link" id="faiLauncher" type="button" aria-label="Open Fantzawya AI">
+    <span>✦</span>
+    <small>AI</small>
+</button>
 </div></nav>
 <div class="app-message-modal" id="appMessageModal" hidden aria-hidden="true">
  <div class="app-message-backdrop" data-popup-close></div>
@@ -305,5 +312,15 @@
  </section>
 </div>
 <script src="app.js" type="module"></script>
+<!-- Fantzawya AI assistant -->
+<section class="fai-panel" id="faiPanel" hidden aria-label="Fantzawya AI assistant">
+ <header class="fai-header"><div><strong>✦ Fantzawya AI</strong><small>Your study & planning assistant</small></div><button id="faiClose" type="button" aria-label="Close assistant">×</button></header>
+ <div class="fai-suggestions" id="faiSuggestions"><button type="button" data-prompt="اعملّي جدول مذاكرة مناسب لوقتي وامتحاناتي">نظّم جدول مذاكرتي</button><button type="button" data-prompt="ساعدني أرتب مهامي وأولوياتي النهارده">رتّب مهامي</button><button type="button" data-prompt="إزاي أزود تركيزي وألتزم بالمذاكرة؟">ساعدني أركز</button></div>
+ <div class="fai-messages" id="faiMessages" aria-live="polite"><div class="fai-message assistant">أهلاً بيك! أنا مساعد Fantzawya. اسألني عن المذاكرة أو تنظيم وقتك أو حل مشكلة بتواجهك.</div></div>
+ <form class="fai-compose" id="faiForm"><textarea id="faiInput" rows="2" maxlength="1500" placeholder="اكتب سؤالك هنا..." required></textarea><button id="faiSend" type="submit">إرسال</button></form>
+ <small class="fai-disclaimer">راجع أي جدول مقترح وعدّله حسب ظروفك. لا تشارك كلمات المرور أو بياناتك الخاصة.</small>
+</section>
+<script src="ai.js" type="module"></script>
+
 </body>
 </html>

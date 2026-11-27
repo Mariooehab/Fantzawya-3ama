@@ -136,23 +136,27 @@ document.getElementById("appMessageOk")?.addEventListener("click", () => closeAp
 document.getElementById("appMessageCancel")?.addEventListener("click", () => closeAppPopup(false));
 document.querySelector(".app-message-backdrop")?.addEventListener("click", () => closeAppPopup(false));
 
-function appAlert(text) { return showAppPopup(text, { error: /could not|failed|error|denied/i.test(String(text)) }); }
+// Ordinary action notices are logged instead of interrupting the user with popups.
+// The owner invitation uses appChoice(), and logout keeps its dedicated appConfirm().
+function appAlert(text) {
+    const messageText = String(text ?? "");
+    const isError = /could not|failed|error|denied/i.test(messageText);
+    (isError ? console.error : console.info)("Fantzawya notice:", messageText);
+    return Promise.resolve(true);
+}
 function appConfirm(text) { return showAppPopup(text, { confirm: true, title: "Please Confirm" }); }
 function appChoice(text, options = {}) { return showAppPopup(text, { confirm: true, title: "Fantzawya", ...options }); }
 
 function showMessage(text, error = false) {
     message.textContent = text;
     message.style.color = error ? "#ff6b81" : "#a78bfa";
-    if (text) appAlert(text);
+    if (text) (error ? console.error : console.info)("Fantzawya:", text);
 }
 
 function setTimerMessage(text, error = false) {
     timerMessage.textContent = text;
     timerMessage.classList.toggle("error", error);
-    if (text && text !== appPopupLastMessage) {
-        appPopupLastMessage = text;
-        appAlert(text);
-    }
+    if (text) (error ? console.error : console.info)("Study timer:", text);
 }
 
 
@@ -471,9 +475,9 @@ async function offerOwnerFriendPrompt(user) {
     const actionButton = { disabled: false, textContent: "ADD FRIEND" };
     await sendFriendRequest(owner, actionButton);
     if (actionButton.textContent === "REQUEST SENT") {
-        await appAlert("Friend request sent to the Fantzawya owner! 👑");
+        appAlert("Friend request sent to the Fantzawya owner! 👑");
     } else if (actionButton.textContent === "REQUEST EXISTS") {
-        await appAlert("You already have a friend request or friendship with the owner.");
+        appAlert("You already have a friend request or friendship with the owner.");
     }
 }
 
@@ -1810,3 +1814,25 @@ onAuthStateChanged(auth, async user => {
         currentProfile = null;
     }
 });
+
+
+// Expand/collapse the study countdown and stopwatch into a focused full-screen view.
+const timerExpandBtn = document.getElementById("timerExpandBtn");
+const studyTimerSection = document.getElementById("studyTimer");
+if (timerExpandBtn && studyTimerSection) {
+    const setTimerExpanded = expanded => {
+        studyTimerSection.classList.toggle("timer-expanded", expanded);
+        document.body.classList.toggle("timer-overlay-open", expanded);
+        timerExpandBtn.setAttribute("aria-expanded", String(expanded));
+        timerExpandBtn.innerHTML = expanded ? '⤢ <span>تصغير</span>' : '⛶ <span>تكبير</span>';
+        timerExpandBtn.setAttribute("aria-label", expanded ? "Shrink timer" : "Expand timer");
+    };
+    timerExpandBtn.addEventListener("click", () => {
+        setTimerExpanded(!studyTimerSection.classList.contains("timer-expanded"));
+    });
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && studyTimerSection.classList.contains("timer-expanded")) {
+            setTimerExpanded(false);
+        }
+    });
+}
