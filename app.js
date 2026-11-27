@@ -86,16 +86,19 @@ const timerResetBtn = document.getElementById("timerResetBtn");
 const timerMessage = document.getElementById("timerMessage");
 
 let currentProfile = null;
+// The owner identity is resolved from the authenticated account, then published
+// in publicProfiles so every member (including newly registered members) can see it.
 const OWNER_EMAIL = "untiban59@gmail.com";
 const isOwnerAccount = user => (user?.email || "").trim().toLowerCase() === OWNER_EMAIL;
-function addOwnerTag(target, className = "owner-tag") {
-    if (!target || target.querySelector(`.${className}`)) return;
+function appendOwnerTag(target, text = "👑 OWNER & MAKER", extraClass = "") {
+    if (!target || target.querySelector?.(".owner-tag")) return;
     const tag = document.createElement("span");
-    tag.className = className;
-    tag.textContent = "👑 OWNER & MAKER";
+    tag.className = `owner-tag ${extraClass}`.trim();
+    tag.textContent = text;
     tag.setAttribute("aria-label", "Website owner and maker");
     target.append(tag);
 }
+
 let authFlowInProgress = false;
 let countdownInterval = null;
 let timerInterval = null;
@@ -103,14 +106,53 @@ let timerMode = "countdown";
 let activeSession = null;
 let finishingSession = false;
 
+let appPopupResolver = null;
+let appPopupLastMessage = "";
+
+function showAppPopup(text, { error = false, confirm = false, title = "Fantzawya", okLabel = null, cancelLabel = "Cancel" } = {}) {
+    const modal = document.getElementById("appMessageModal");
+    if (!modal) return Promise.resolve(true);
+    if (appPopupResolver) { appPopupResolver(false); appPopupResolver = null; }
+    document.getElementById("appMessageTitle").textContent = title;
+    document.getElementById("appMessageText").textContent = String(text ?? "");
+    document.getElementById("appMessageIcon").textContent = error ? "!" : (confirm ? "?" : "✦");
+    modal.querySelector(".app-message-card").classList.toggle("is-error", error);
+    document.getElementById("appMessageCancel").hidden = !confirm;
+    document.getElementById("appMessageCancel").textContent = cancelLabel;
+    document.getElementById("appMessageOk").textContent = okLabel || (confirm ? "Confirm" : "OK");
+    modal.hidden = false;
+    modal.setAttribute("aria-hidden", "false");
+    return new Promise(resolve => { appPopupResolver = resolve; });
+}
+
+function closeAppPopup(result) {
+    const modal = document.getElementById("appMessageModal");
+    if (modal) { modal.hidden = true; modal.setAttribute("aria-hidden", "true"); }
+    const resolve = appPopupResolver; appPopupResolver = null;
+    if (resolve) resolve(Boolean(result));
+}
+
+document.getElementById("appMessageOk")?.addEventListener("click", () => closeAppPopup(true));
+document.getElementById("appMessageCancel")?.addEventListener("click", () => closeAppPopup(false));
+document.querySelector(".app-message-backdrop")?.addEventListener("click", () => closeAppPopup(false));
+
+function appAlert(text) { return showAppPopup(text, { error: /could not|failed|error|denied/i.test(String(text)) }); }
+function appConfirm(text) { return showAppPopup(text, { confirm: true, title: "Please Confirm" }); }
+function appChoice(text, options = {}) { return showAppPopup(text, { confirm: true, title: "Fantzawya", ...options }); }
+
 function showMessage(text, error = false) {
     message.textContent = text;
     message.style.color = error ? "#ff6b81" : "#a78bfa";
+    if (text) appAlert(text);
 }
 
 function setTimerMessage(text, error = false) {
     timerMessage.textContent = text;
     timerMessage.classList.toggle("error", error);
+    if (text && text !== appPopupLastMessage) {
+        appPopupLastMessage = text;
+        appAlert(text);
+    }
 }
 
 
@@ -126,6 +168,47 @@ tabs.forEach(tab => {
     });
 });
 
+
+/* AUTH PROFILE RECOVERY
+   Firebase Authentication can create the account before a Firestore write fails.
+   This repairs that half-created account instead of leaving registration stuck. */
+async function ensureAccountDocuments(user, fallbackUsername = "") {
+    const userRef = doc(db, "users", user.uid);
+    const userSnapshot = await getDoc(userRef);
+    let profile = userSnapshot.exists() ? userSnapshot.data() : null;
+
+    if (!profile) {
+        const publicRef = doc(db, "publicProfiles", user.uid);
+        const publicSnapshot = await getDoc(publicRef);
+        const recoveredName = (fallbackUsername || publicSnapshot.data()?.username || user.displayName || user.email?.split("@")[0] || "New User")
+            .trim().replace(/\s+/g, " ").slice(0, 20);
+        if (recoveredName.length < 3) throw new Error("Choose a username with at least 3 characters to finish setting up this account.");
+        profile = {
+            username: recoveredName,
+            email: user.email || "",
+            createdAt: serverTimestamp(),
+            xp: 0,
+            streak: 0,
+            status: "online",
+            avatarUrl: "",
+            coverUrl: ""
+        };
+        await setDoc(userRef, profile);
+        profile = { ...profile, username: recoveredName };
+    }
+
+    const username = profile.username || fallbackUsername || user.email?.split("@")[0] || "New User";
+    await setDoc(doc(db, "publicProfiles", user.uid), {
+        uid: user.uid,
+        username,
+        usernameLower: username.toLowerCase(),
+        avatarUrl: profile.avatarUrl || "",
+        coverUrl: profile.coverUrl || "",
+        ...(isOwnerAccount(user) ? { isOwner: true } : {}),
+        updatedAt: serverTimestamp()
+    }, { merge: true });
+    return profile;
+}
 
 /* REGISTER */
 registerForm.addEventListener("submit", async event => {
@@ -146,42 +229,50 @@ registerForm.addEventListener("submit", async event => {
     button.textContent = "CREATING ACCOUNT...";
 
     try {
-        const result = await createUserWithEmailAndPassword(auth, email, password);
-        await setDoc(doc(db, "users", result.user.uid), {
-            username,
-            email,
-            createdAt: serverTimestamp(),
-            xp: 0,
-            streak: 0,
-            status: "online",
-            avatarUrl: "",
-            coverUrl: "",
-            ownerIntroSeen: false
-        });
-        await setDoc(doc(db, "publicProfiles", result.user.uid), {
-            uid: result.user.uid,
-            username,
-            usernameLower: username.toLowerCase(),
-            avatarUrl: "",
-            coverUrl: "",
-            isOwner: isOwnerAccount(result.user),
-            updatedAt: serverTimestamp()
-        });
+        let result;
+        try {
+            result = await createUserWithEmailAndPassword(auth, email, password);
+        } catch (createError) {
+            // A previous attempt may have created the Auth user but failed before
+            // saving Firestore documents. Sign in with the same credentials and repair it.
+            if (createError.code !== "auth/email-already-in-use") throw createError;
+            try {
+                result = await signInWithEmailAndPassword(auth, email, password);
+                const existingProfile = await ensureAccountDocuments(result.user, username);
+                if (existingProfile.username && existingProfile.username !== username) {
+                    appAlert("This email already has an account. We signed you in and restored its missing profile data.");
+                } else {
+                    appAlert("Your previous registration was incomplete. Your account has now been repaired.");
+                }
+                await loadDashboard(result.user);
+                registerForm.reset();
+                return;
+            } catch (recoveryError) {
+                if (recoveryError.code === "auth/invalid-credential" || recoveryError.code === "auth/wrong-password" || recoveryError.code === "auth/user-not-found") {
+                    throw new Error("Firebase Authentication already has this email. The password doesn't match that account. Try LOGIN or use Forgot Password.");
+                }
+                throw recoveryError;
+            }
+        }
+
+        await ensureAccountDocuments(result.user, username);
         registerForm.reset();
-        showMessage("Account created successfully!");
-        await loadDashboard(result.user, { showOwnerIntro: true });
+        await appAlert("Account created successfully!");
+        await loadDashboard(result.user);
+        await offerOwnerFriendPrompt(result.user);
     } catch (error) {
         console.error("Registration error:", error);
         const errors = {
-            "auth/email-already-in-use": "This email is already registered.",
+            "auth/email-already-in-use": "Firebase Authentication already has this email. Try LOGIN or use Forgot Password.",
             "auth/invalid-email": "Invalid email address.",
             "auth/weak-password": "Password must be at least 6 characters.",
             "auth/network-request-failed": "Check your internet connection.",
             "auth/operation-not-allowed": "Email/Password sign-in is disabled. Enable it in Firebase Console → Authentication → Sign-in method.",
             "auth/too-many-requests": "Too many attempts. Wait a little and try again.",
-            "permission-denied": "Firestore permission denied."
+            "permission-denied": "Firestore permission denied. Publish the latest Firestore Rules.",
+            "unauthenticated": "Please sign in again and retry."
         };
-        showMessage(errors[error.code] || `${error.code || "Error"}: ${error.message}`, true);
+        appAlert(errors[error.code] || error.message || `${error.code || "Error"}: Registration failed.`);
     } finally {
         authFlowInProgress = false;
         button.disabled = false;
@@ -224,12 +315,14 @@ loginForm.addEventListener("submit", async event => {
 
 
 /* DASHBOARD */
-async function loadDashboard(user, options = {}) {
+async function loadDashboard(user) {
     try {
-        const profileSnapshot = await getDoc(doc(db, "users", user.uid));
+        let profileSnapshot = await getDoc(doc(db, "users", user.uid));
         if (!profileSnapshot.exists()) {
-            throw new Error("User profile not found in Firestore.");
+            await ensureAccountDocuments(user);
+            profileSnapshot = await getDoc(doc(db, "users", user.uid));
         }
+        if (!profileSnapshot.exists()) throw new Error("Could not restore this account profile. Check Firestore Rules.");
 
         const profile = profileSnapshot.data();
         currentProfile = profile;
@@ -242,7 +335,7 @@ async function loadDashboard(user, options = {}) {
                 usernameLower: (profile.username || "User").toLowerCase(),
                 avatarUrl: profile.avatarUrl || "",
                 coverUrl: profile.coverUrl || "",
-                isOwner: isOwnerAccount(user),
+                ...(isOwnerAccount(user) ? { isOwner: true } : {}),
                 updatedAt: serverTimestamp()
             });
         } else if (isOwnerAccount(user) && publicProfileSnapshot.data().isOwner !== true) {
@@ -263,9 +356,8 @@ async function loadDashboard(user, options = {}) {
         ["sidebarUsername", "topbarUsername", "profileUsername"].forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
-            el.classList.toggle("is-site-owner", isOwnerAccount(user));
-            if (isOwnerAccount(user)) addOwnerTag(el, "owner-tag");
-            else el.querySelectorAll(".owner-tag").forEach(tag => tag.remove());
+            el.querySelectorAll(".owner-tag").forEach(tag => tag.remove());
+            if (isOwnerAccount(user)) appendOwnerTag(el);
         });
         const profileBadge = document.querySelector(".profile-badge");
         if (profileBadge) {
@@ -299,9 +391,6 @@ async function loadDashboard(user, options = {}) {
         await loadCommunityFeatures(user.uid);
         await loadFriends(user.uid);
         await restoreStudySession(user.uid);
-        if (options.showOwnerIntro && profile.ownerIntroSeen !== true) {
-            await showOwnerWelcome(user);
-        }
     } catch (error) {
         console.error("Dashboard error:", error);
         authContainer.hidden = false;
@@ -314,159 +403,78 @@ async function loadDashboard(user, options = {}) {
 
 /* LOGOUT */
 async function logout() {
-    const modal = document.getElementById("logoutModal");
-    const cancelBtn = document.getElementById("cancelLogoutBtn");
-    const confirmBtn = document.getElementById("confirmLogoutBtn");
-    if (!modal || !cancelBtn || !confirmBtn) return;
-    modal.hidden = false;
-    await new Promise(resolve => {
-        const cleanup = () => {
-            modal.hidden = true;
-            cancelBtn.removeEventListener("click", cancel);
-            confirmBtn.removeEventListener("click", confirm);
-            modal.removeEventListener("click", backdrop);
-            document.removeEventListener("keydown", escape);
-        };
-        const cancel = () => { cleanup(); resolve(false); };
-        const backdrop = event => { if (event.target === modal) cancel(); };
-        const escape = event => { if (event.key === "Escape") cancel(); };
-        const confirm = async () => {
-            cleanup();
-            try {
-                await signOut(auth);
-                dashboard.hidden = true;
-                mobileNav.hidden = true;
-                authContainer.hidden = false;
-                loginForm.reset();
-                registerForm.reset();
-                showMessage("You have been logged out.");
-                stopTimerTicker();
-                resolve(true);
-            } catch (error) {
-                console.error("Logout error:", error);
-                showMessage("Could not log out. Please try again.", true);
-                resolve(false);
-            }
-        };
-        cancelBtn.addEventListener("click", cancel);
-        confirmBtn.addEventListener("click", confirm);
-        modal.addEventListener("click", backdrop);
-        document.addEventListener("keydown", escape);
-    });
+    const confirmed = await appConfirm("Are you sure you want to log out?");
+    if (!confirmed) return;
+    try {
+        // Keep an active timer intact so the same user can resume it after logging in again.
+        await signOut(auth);
+        dashboard.hidden = true;
+        mobileNav.hidden = true;
+        authContainer.hidden = false;
+        loginForm.reset();
+        registerForm.reset();
+        showMessage("You have been logged out.");
+        stopTimerTicker();
+    } catch (error) {
+        console.error("Logout error:", error);
+        appAlert("Could not log out. Please try again.");
+    }
 }
 
 logoutBtn.addEventListener("click", logout);
 mobileLogoutBtn.addEventListener("click", logout);
 
+
 const mobileNavToggle = document.getElementById("mobileNavToggle");
 const mobileNavMenu = document.getElementById("mobileNavMenu");
 const mobileNavCurrent = document.getElementById("mobileNavCurrent");
-mobileNavToggle.addEventListener("click", () => {
-    const opened = mobileNavMenu.classList.toggle("is-open");
-    mobileNavToggle.setAttribute("aria-expanded", String(opened));
-    mobileNavToggle.classList.toggle("is-open", opened);
-});
-mobileNavMenu.querySelectorAll("a[data-page]").forEach(link => {
-    link.addEventListener("click", () => {
-        const label = link.querySelector("small")?.textContent || "Menu";
-        mobileNavCurrent.textContent = label;
-        mobileNavMenu.classList.remove("is-open");
-        mobileNavToggle.classList.remove("is-open");
-        mobileNavToggle.setAttribute("aria-expanded", "false");
+
+if (mobileNavToggle && mobileNavMenu) {
+    mobileNavToggle.addEventListener("click", () => {
+        const opened = mobileNavMenu.classList.toggle("is-open");
+        mobileNavToggle.setAttribute("aria-expanded", String(opened));
+        mobileNavToggle.classList.toggle("is-open", opened);
     });
-});
 
-
-/* NEW MEMBER OWNER INTRO */
-async function showOwnerWelcome(user) {
-    const modal = ensureOwnerWelcomeModal();
-    const title = modal.querySelector("#ownerWelcomeName");
-    const avatar = modal.querySelector("#ownerWelcomeAvatar");
-    const tag = modal.querySelector("#ownerWelcomeTag");
-    const addButton = modal.querySelector("#ownerWelcomeAdd");
-    const skipButton = modal.querySelector("#ownerWelcomeSkip");
-    const status = modal.querySelector("#ownerWelcomeStatus");
-
-    try {
-        const owners = await getDocs(query(collection(db, "publicProfiles"), where("isOwner", "==", true)));
-        const ownerDoc = owners.docs.find(item => item.id !== user.uid) || owners.docs[0];
-        if (!ownerDoc) return;
-        const owner = { ...ownerDoc.data(), uid: ownerDoc.id };
-        title.textContent = owner.username || "Website Owner";
-        tag.textContent = "👑 WEBSITE OWNER & MAKER";
-        if (owner.avatarUrl) {
-            avatar.style.backgroundImage = `url("${owner.avatarUrl}")`;
-            avatar.classList.add("has-photo");
-            avatar.textContent = "";
-        } else {
-            avatar.style.backgroundImage = "";
-            avatar.classList.remove("has-photo");
-            avatar.textContent = (owner.username || "O").charAt(0).toUpperCase();
-        }
-        if (owner.coverUrl) modal.querySelector(".owner-welcome-cover").style.backgroundImage = `url("${owner.coverUrl}")`;
-
-        modal.hidden = false;
-        const finish = async () => {
-            try {
-                await updateDoc(doc(db, "users", user.uid), { ownerIntroSeen: true });
-                currentProfile = { ...currentProfile, ownerIntroSeen: true };
-            } catch (error) {
-                console.error("Could not save owner intro state:", error);
-                status.textContent = "Could not save this choice. It may appear again next time.";
-            }
-            modal.hidden = true;
-        };
-        skipButton.onclick = finish;
-        addButton.onclick = async () => {
-            addButton.disabled = true;
-            addButton.textContent = "SENDING...";
-            try {
-                const sent = await sendFriendRequest(owner, addButton);
-                if (sent || addButton.textContent === "REQUEST EXISTS") {
-                    status.textContent = sent ? "Friend request sent to the Owner!" : "You already have a connection with the Owner.";
-                    await finish();
-                } else {
-                    addButton.disabled = false;
-                    addButton.textContent = "ADD OWNER";
-                    status.textContent = "Could not send request. You can try again from Friends.";
-                }
-            } catch (error) {
-                status.textContent = error.message || "Could not send request. Try again from Friends.";
-                addButton.disabled = false;
-                addButton.textContent = "ADD OWNER";
-            }
-        };
-        modal.querySelector("[data-close-owner-welcome]").onclick = finish;
-    } catch (error) {
-        console.error("Owner welcome popup error:", error);
-    }
+    mobileNavMenu.querySelectorAll("a[data-page]").forEach(link => {
+        link.addEventListener("click", () => {
+            const label = link.querySelector("small")?.textContent || "Menu";
+            if (mobileNavCurrent) mobileNavCurrent.textContent = label;
+            mobileNavMenu.classList.remove("is-open");
+            mobileNavToggle.classList.remove("is-open");
+            mobileNavToggle.setAttribute("aria-expanded", "false");
+        });
+    });
 }
 
-function ensureOwnerWelcomeModal() {
-    let modal = document.getElementById("ownerWelcomeModal");
-    if (modal) return modal;
-    modal = document.createElement("div");
-    modal.id = "ownerWelcomeModal";
-    modal.className = "owner-welcome-modal";
-    modal.hidden = true;
-    modal.innerHTML = `<div class="owner-welcome-backdrop" data-close-owner-welcome></div>
-      <section class="owner-welcome-card" role="dialog" aria-modal="true" aria-labelledby="ownerWelcomeHeading">
-        <button class="owner-welcome-close" type="button" data-close-owner-welcome aria-label="Close">×</button>
-        <div class="owner-welcome-cover"></div>
-        <div class="owner-welcome-avatar" id="ownerWelcomeAvatar">O</div>
-        <div class="owner-welcome-kicker">WELCOME TO FANTZAWYA</div>
-        <h2 id="ownerWelcomeHeading">Meet the Owner</h2>
-        <h3 id="ownerWelcomeName">Website Owner</h3>
-        <div class="owner-welcome-tag" id="ownerWelcomeTag">👑 WEBSITE OWNER & MAKER</div>
-        <p class="owner-welcome-copy">حابب تعرفك على الشخص اللي أسّس Fantzawya وبيطوّرها. تقدر تبعتله طلب صداقة وتتواصلوا من داخل المجتمع.</p>
-        <div class="owner-welcome-actions">
-          <button type="button" class="owner-welcome-add" id="ownerWelcomeAdd">ADD OWNER</button>
-          <button type="button" class="owner-welcome-skip" id="ownerWelcomeSkip">Maybe later</button>
-        </div>
-        <p class="owner-welcome-status" id="ownerWelcomeStatus" aria-live="polite"></p>
-      </section>`;
-    document.body.append(modal);
-    return modal;
+/* NEW MEMBER OWNER INTRO */
+async function offerOwnerFriendPrompt(user) {
+    if (!user || isOwnerAccount(user)) return;
+    const ownRef = doc(db, "users", user.uid);
+    const ownSnapshot = await getDoc(ownRef);
+    if (!ownSnapshot.exists() || ownSnapshot.data().ownerSuggestionSeen === true) return;
+
+    // Mark it before opening the modal so refreshes or multiple auth events never duplicate it.
+    await updateDoc(ownRef, { ownerSuggestionSeen: true, ownerSuggestionSeenAt: serverTimestamp() });
+
+    const ownerQuery = await getDocs(query(collection(db, "publicProfiles"), where("isOwner", "==", true)));
+    const ownerDoc = ownerQuery.docs.find(item => item.id !== user.uid);
+    if (!ownerDoc) return;
+
+    const owner = { uid: ownerDoc.id, ...ownerDoc.data() };
+    const addOwner = await appChoice(
+        `Welcome to Fantzawya, ${currentProfile?.username || "new member"}! Would you like to add the website owner to your friends?`,
+        { title: "Meet the Owner 👑", okLabel: "ADD OWNER", cancelLabel: "MAYBE LATER" }
+    );
+    if (!addOwner) return;
+
+    const actionButton = { disabled: false, textContent: "ADD FRIEND" };
+    await sendFriendRequest(owner, actionButton);
+    if (actionButton.textContent === "REQUEST SENT") {
+        await appAlert("Friend request sent to the Fantzawya owner! 👑");
+    } else if (actionButton.textContent === "REQUEST EXISTS") {
+        await appAlert("You already have a friend request or friendship with the owner.");
+    }
 }
 
 /* PROFILE + FRIENDS */
@@ -548,7 +556,6 @@ if (saveProfileBtn) saveProfileBtn.addEventListener("click", async () => {
             usernameLower,
             avatarUrl,
             coverUrl,
-            isOwner: isOwnerAccount(user),
             updatedAt: serverTimestamp()
         });
 
@@ -702,7 +709,7 @@ async function searchFriend() {
         if (person.avatarUrl) { avatar.style.backgroundImage = `url("${person.avatarUrl}")`; avatar.classList.add("has-photo"); }
         else avatar.textContent = (person.username || "U").charAt(0).toUpperCase();
         const name = document.createElement("strong"); name.textContent = person.username;
-        if (person.isOwner) { const tag = document.createElement("span"); tag.className = "owner-tag"; tag.textContent = "👑 OWNER"; name.append(" ", tag); }
+        if (person.isOwner === true) appendOwnerTag(name, "👑 OWNER");
         const add = document.createElement("button"); add.type = "button"; add.className = "community-action-btn"; add.textContent = "ADD FRIEND";
         add.addEventListener("click", () => sendFriendRequest(person, add));
         card.append(avatar, name, add); result.append(card);
@@ -739,8 +746,7 @@ async function sendFriendRequest(person, button) {
     } catch (error) {
         console.error("Friend request error:", error);
         button.disabled = false;
-        alert(error.code === "permission-denied" ? "Firestore denied this request. Publish the updated Rules." : error.message);
-        return false;
+        appAlert(error.code === "permission-denied" ? "Firestore denied this request. Publish the updated Rules." : error.message);
     }
 }
 
@@ -793,7 +799,8 @@ async function loadFriends(uid) {
             else avatar.textContent = (person.username || "U").charAt(0).toUpperCase();
             const details = document.createElement("span"); details.className = "friend-identity-text";
             const label = document.createElement("strong"); label.textContent = person.username || "Friend";
-            if (person.isOwner) { const tag = document.createElement("span"); tag.className = "owner-tag"; tag.textContent = "👑 OWNER"; label.append(" ", tag); }
+            if (person.isOwner === true) appendOwnerTag(label, "👑 OWNER");
+            if (person.isOwner === true) avatar.classList.add("owner-avatar");
             const handle = document.createElement("small"); handle.textContent = `@${person.username || "member"}`;
             details.append(label, handle); identity.append(avatar, details);
             identity.addEventListener("click", () => openFriendProfile(person, isFavorite));
@@ -814,7 +821,7 @@ async function respondToFriendRequest(requestId, status) {
         await loadFriends(auth.currentUser.uid);
     } catch (error) {
         console.error("Friend response error:", error);
-        alert(error.code === "permission-denied" ? "Firestore denied this action. Publish the updated Rules." : error.message);
+        appAlert(error.code === "permission-denied" ? "Firestore denied this action. Publish the updated Rules." : error.message);
     }
 }
 
@@ -841,8 +848,9 @@ async function openFriendProfile(person, favorite) {
     avatar.textContent = person.avatarUrl ? "" : (person.username || "U").charAt(0).toUpperCase();
     const friendName = document.getElementById("friendProfileName");
     friendName.textContent = person.username || "Friend";
-    if (person.isOwner) { const tag = document.createElement("span"); tag.className = "owner-tag owner-tag-large"; tag.textContent = "👑 WEBSITE OWNER & MAKER"; friendName.append(" ", tag); }
-    avatar.classList.toggle("owner-avatar", !!person.isOwner);
+    friendName.querySelectorAll(".owner-tag").forEach(tag => tag.remove());
+    if (person.isOwner === true) appendOwnerTag(friendName, "👑 WEBSITE OWNER & MAKER", "owner-tag-large");
+    avatar.classList.toggle("owner-avatar", person.isOwner === true);
     document.getElementById("friendProfileUsername").textContent = `@${person.username || "member"}`;
     const statsBox = document.getElementById("friendProfileStats");
     statsBox.innerHTML = '<div class="friend-stat-card"><strong>...</strong><span>STUDY HOURS</span></div><div class="friend-stat-card"><strong>...</strong><span>DAY STREAK 🔥</span></div><div class="friend-stat-card"><strong>...</strong><span>SESSIONS</span></div><div class="friend-stat-card"><strong>...</strong><span>BEST STREAK</span></div>';
@@ -850,6 +858,8 @@ async function openFriendProfile(person, favorite) {
         const sessionsSnap = await getDocs(query(collection(db, "studySessions"), where("uid", "==", person.uid)));
         const completed = sessionsSnap.docs.map(item => item.data()).filter(item => item.status === "completed");
         const totalSeconds = completed.reduce((sum, item) => sum + Math.max(0, Number(item.durationSeconds) || 0), 0);
+        const countdownSeconds = completed.filter(item => item.mode === "countdown").reduce((sum, item) => sum + Math.max(0, Number(item.durationSeconds) || 0), 0);
+        const stopwatchSeconds = completed.filter(item => item.mode === "stopwatch").reduce((sum, item) => sum + Math.max(0, Number(item.durationSeconds) || 0), 0);
         const dayKeys = [...new Set(completed.map(item => {
             const stamp = item.startedAt?.toDate?.() || (item.startedAt?.toMillis ? new Date(item.startedAt.toMillis()) : null);
             return stamp && !Number.isNaN(stamp.getTime()) ? `${stamp.getFullYear()}-${stamp.getMonth()}-${stamp.getDate()}` : null;
@@ -869,14 +879,14 @@ async function openFriendProfile(person, favorite) {
             bestStreak = Math.max(bestStreak, run); previous = date;
         });
         const hours = (totalSeconds / 3600).toFixed(totalSeconds >= 36000 ? 0 : 1);
-        statsBox.innerHTML = `<div class="friend-stat-card"><strong>${hours}h</strong><span>STUDY HOURS</span></div><div class="friend-stat-card"><strong>${currentStreak} 🔥</strong><span>DAY STREAK</span></div><div class="friend-stat-card"><strong>${completed.length}</strong><span>SESSIONS</span></div><div class="friend-stat-card"><strong>${bestStreak} days</strong><span>BEST STREAK</span></div>`;
+        statsBox.innerHTML = `<div class="friend-stat-card"><strong>${formatStudyTotal(totalSeconds)}</strong><span>TOTAL STUDY TIME</span></div><div class="friend-stat-card"><strong>${formatStudyTotal(countdownSeconds)}</strong><span>COUNTDOWN</span></div><div class="friend-stat-card"><strong>${formatStudyTotal(stopwatchSeconds)}</strong><span>STOPWATCH</span></div><div class="friend-stat-card"><strong>${currentStreak} 🔥</strong><span>DAY STREAK</span></div><div class="friend-stat-card"><strong>${completed.length}</strong><span>SESSIONS</span></div><div class="friend-stat-card"><strong>${bestStreak} days</strong><span>BEST STREAK</span></div>`;
     } catch (error) {
         console.error("Could not load friend study stats:", error);
         statsBox.innerHTML = '<p class="community-note">Study statistics are unavailable right now.</p>';
     }
     const fav = document.getElementById("friendProfileFavorite"); fav.textContent = favorite ? "★ FAVORITED" : "☆ ADD TO FAVORITES";
     fav.onclick = async () => { await toggleFriendFavorite(person.uid, !favorite); modal.hidden = true; };
-    document.getElementById("friendProfileRemove").onclick = async () => { if (confirm(`Remove ${person.username || "this friend"} from your friends?`)) { await removeFriend(person.uid); modal.hidden = true; } };
+    document.getElementById("friendProfileRemove").onclick = async () => { if (await appConfirm(`Remove ${person.username || "this friend"} from your friends?`)) { await removeFriend(person.uid); modal.hidden = true; } };
     const select = document.getElementById("friendInviteLeague"); select.replaceChildren();
     const placeholder = document.createElement("option"); placeholder.value = ""; placeholder.textContent = "Choose a league"; select.append(placeholder);
     try {
@@ -898,7 +908,7 @@ async function toggleFriendFavorite(friendUid, favorite) {
     try {
         await setDoc(doc(db, "users", auth.currentUser.uid, "friendSettings", friendUid), { favorite, updatedAt: serverTimestamp() }, { merge: true });
         await loadFriends(auth.currentUser.uid);
-    } catch (error) { console.error("Favorite update failed:", error); alert(`Could not update favorite (${error.code || error.message}). Publish the latest Firestore Rules.`); }
+    } catch (error) { console.error("Favorite update failed:", error); appAlert(`Could not update favorite (${error.code || error.message}). Publish the latest Firestore Rules.`); }
 }
 
 async function removeFriend(friendUid) {
@@ -913,7 +923,7 @@ async function removeFriend(friendUid) {
         await Promise.all(refs.map(item => updateDoc(item.ref, { status: "removed", respondedAt: serverTimestamp() })));
         await deleteDoc(doc(db, "users", uid, "friendSettings", friendUid));
         await loadFriends(uid);
-    } catch (error) { console.error("Remove friend failed:", error); alert(`Could not remove friend (${error.code || error.message}). Publish the latest Firestore Rules.`); }
+    } catch (error) { console.error("Remove friend failed:", error); appAlert(`Could not remove friend (${error.code || error.message}). Publish the latest Firestore Rules.`); }
 }
 
 /* EXAM COUNTDOWN */
@@ -997,10 +1007,13 @@ function formatDuration(totalSeconds) {
 }
 
 function formatStudyTotal(totalSeconds) {
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m`;
+    const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+    const hours = Math.floor(safeSeconds / 3600);
+    const minutes = Math.floor((safeSeconds % 3600) / 60);
+    const seconds = safeSeconds % 60;
+    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+    if (minutes > 0) return `${minutes}m ${seconds}s`;
+    return `${seconds}s`;
 }
 
 function getElapsedMilliseconds(session, now = Date.now()) {
@@ -1274,7 +1287,7 @@ async function finishStudySession(autoFinished = false) {
 async function resetStudySession() {
     if (!activeSession) return;
 
-    const confirmed = window.confirm("Reset this session? Its current study time will not be saved.");
+    const confirmed = await appConfirm("Reset this session? Its current study time will not be saved.");
     if (!confirmed) return;
 
     const user = auth.currentUser;
@@ -1343,6 +1356,40 @@ async function restoreStudySession(uid) {
 }
 
 
+/* RESET COMPLETED STUDY SESSIONS */
+const resetStudyStatsBtn = document.getElementById("resetStudyStatsBtn");
+if (resetStudyStatsBtn) {
+    resetStudyStatsBtn.addEventListener("click", async () => {
+        const user = auth.currentUser;
+        if (!user || resetStudyStatsBtn.disabled) return;
+        const confirmed = await appConfirm("Are you sure you want to reset all your study statistics? This will permanently delete your completed Countdown and Stopwatch sessions and cannot be undone.");
+        if (!confirmed) return;
+
+        resetStudyStatsBtn.disabled = true;
+        const originalText = resetStudyStatsBtn.textContent;
+        resetStudyStatsBtn.textContent = "RESETTING...";
+        try {
+            const sessionsSnapshot = await getDocs(query(
+                collection(db, "studySessions"),
+                where("uid", "==", user.uid)
+            ));
+            const completedSessions = sessionsSnapshot.docs.filter(item => item.data().status === "completed");
+            for (const sessionDoc of completedSessions) {
+                await deleteDoc(sessionDoc.ref);
+            }
+            await loadStudyStats(user.uid);
+            await loadCommunityFeatures(user.uid);
+            appAlert(`Study statistics reset successfully. ${completedSessions.length} completed sessions cleared.`);
+        } catch (error) {
+            console.error("Could not reset study statistics:", error);
+            appAlert(`Could not reset study statistics: ${error.message || error}`);
+        } finally {
+            resetStudyStatsBtn.disabled = false;
+            resetStudyStatsBtn.textContent = originalText;
+        }
+    });
+}
+
 /* LOAD STUDY TOTALS FROM FIRESTORE */
 async function loadStudyStats(uid) {
     try {
@@ -1353,21 +1400,37 @@ async function loadStudyStats(uid) {
         const snapshot = await getDocs(sessionsQuery);
 
         let totalSeconds = 0;
+        let countdownSeconds = 0;
+        let stopwatchSeconds = 0;
         let completedCount = 0;
 
         snapshot.forEach(sessionDoc => {
             const data = sessionDoc.data();
             if (data.status === "completed") {
-                totalSeconds += Math.max(0, Number(data.durationSeconds) || 0);
+                const seconds = Math.max(0, Number(data.durationSeconds) || 0);
+                totalSeconds += seconds;
+                if (data.mode === "countdown") countdownSeconds += seconds;
+                if (data.mode === "stopwatch") stopwatchSeconds += seconds;
                 completedCount++;
             }
         });
 
         const formatted = formatStudyTotal(totalSeconds);
-        document.getElementById("totalStudyTime").textContent = formatted;
-        document.getElementById("completedSessions").textContent = `${completedCount} completed sessions`;
-        document.getElementById("profileStudyTime").textContent = formatted;
-        document.getElementById("profileSessionCount").textContent = completedCount;
+
+        // Update only elements that actually exist on the current page.
+        const totalStudyTimeEl = document.getElementById("totalStudyTime");
+        const completedSessionsEl = document.getElementById("completedSessions");
+        const profileStudyTimeEl = document.getElementById("profileStudyTime");
+        const profileSessionCountEl = document.getElementById("profileSessionCount");
+        const profileCountdownTimeEl = document.getElementById("profileCountdownTime");
+        const profileStopwatchTimeEl = document.getElementById("profileStopwatchTime");
+
+        if (totalStudyTimeEl) totalStudyTimeEl.textContent = formatted;
+        if (completedSessionsEl) completedSessionsEl.textContent = `${completedCount} completed sessions`;
+        if (profileStudyTimeEl) profileStudyTimeEl.textContent = formatted;
+        if (profileSessionCountEl) profileSessionCountEl.textContent = completedCount;
+        if (profileCountdownTimeEl) profileCountdownTimeEl.textContent = formatStudyTotal(countdownSeconds);
+        if (profileStopwatchTimeEl) profileStopwatchTimeEl.textContent = formatStudyTotal(stopwatchSeconds);
     } catch (error) {
         console.error("Could not load study statistics:", {
             code: error.code || "unknown",
@@ -1393,10 +1456,7 @@ function getSessionStartMillis(data) {
 }
 
 function formatChallengeTime(seconds) {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    if (h) return `${h}h ${m}m`;
-    return `${m}m`;
+    return formatStudyTotal(seconds);
 }
 
 async function loadCommunityFeatures(uid) {
@@ -1480,7 +1540,7 @@ async function joinChallenge(uid, challenge) {
     } catch (error) {
         console.error("Could not join challenge:", error);
         if (button) { button.disabled = false; button.textContent = "JOIN CHALLENGE"; }
-        alert(error.code === "permission-denied" ? "Firestore denied joining this challenge. Publish the updated rules." : error.message);
+        appAlert(error.code === "permission-denied" ? "Firestore denied joining this challenge. Publish the updated rules." : error.message);
     }
 }
 
@@ -1492,8 +1552,11 @@ async function loadWeeklyLeaderboard(currentUid) {
         snapshot.forEach(item => {
             const data = item.data();
             if (data.status !== "completed" || !data.uid) return;
-            const member = members.get(data.uid) || { uid: data.uid, username: data.username || (data.uid === currentUid ? currentProfile?.username : "Community Member") || "Community Member", seconds: 0 };
-            member.seconds += Math.max(0, Number(data.durationSeconds) || 0);
+            const member = members.get(data.uid) || { uid: data.uid, username: data.username || (data.uid === currentUid ? currentProfile?.username : "Community Member") || "Community Member", seconds: 0, countdownSeconds: 0, stopwatchSeconds: 0 };
+            const sessionSeconds = Math.max(0, Number(data.durationSeconds) || 0);
+            member.seconds += sessionSeconds;
+            if (data.mode === "countdown") member.countdownSeconds += sessionSeconds;
+            if (data.mode === "stopwatch") member.stopwatchSeconds += sessionSeconds;
             if (data.username) member.username = data.username;
             members.set(data.uid, member);
         });
@@ -1519,7 +1582,8 @@ async function loadWeeklyLeaderboard(currentUid) {
             left.append(rank, name);
             const time = document.createElement("strong");
             time.className = "leaderboard-time";
-            time.textContent = formatChallengeTime(member.seconds);
+            time.textContent = `${formatChallengeTime(member.seconds)}  |  ⏳ ${formatChallengeTime(member.countdownSeconds)}  |  ⏱ ${formatChallengeTime(member.stopwatchSeconds)}`;
+            time.title = "Total study time | Countdown | Stopwatch";
             row.append(left, time);
             list.append(row);
         });
@@ -1624,7 +1688,7 @@ async function loadLeagueTasks() {
             button.textContent = done ? "DONE ✓" : "MARK DONE"; button.disabled = done;
             button.addEventListener("click", async () => {
                 try { await updateDoc(doc(db, "leagues", activeLeagueId, "tasks", taskDoc.id), { completedBy: [...(task.completedBy || []), auth.currentUser.uid] }); await loadLeagueTasks(); }
-                catch (error) { alert(`Could not update task: ${error.code || error.message}`); }
+                catch (error) { appAlert(`Could not update task: ${error.code || error.message}`); }
             });
             row.append(label, count, button); list.append(row);
         });
@@ -1638,7 +1702,7 @@ async function addLeagueTask() {
         await addDoc(collection(db, "leagues", activeLeagueId, "tasks"), { title, createdBy: auth.currentUser.uid, createdAt: serverTimestamp(), completedBy: [] });
         document.getElementById("leagueTaskInput").value = "";
         await loadLeagueTasks();
-    } catch (error) { alert(`Could not add task: ${error.code || error.message}`); }
+    } catch (error) { appAlert(`Could not add task: ${error.code || error.message}`); }
 }
 
 async function loadLeagueRanking() {
@@ -1647,13 +1711,14 @@ async function loadLeagueRanking() {
     list.textContent = "Calculating all-time study totals...";
     try {
         const sessionSnap = await getDocs(collection(db, "studySessions"));
-        const members = new Map((activeLeagueData.memberUids || []).map(uid => [uid, { uid, username: "Member", seconds: 0 }]));
-        sessionSnap.forEach(item => { const d = item.data(); const member = members.get(d.uid); if (member && d.status === "completed") { member.seconds += Number(d.durationSeconds) || 0; if (d.username) member.username = d.username; } });
+        const members = new Map((activeLeagueData.memberUids || []).map(uid => [uid, { uid, username: "Member", seconds: 0, countdownSeconds: 0, stopwatchSeconds: 0 }]));
+        sessionSnap.forEach(item => { const d = item.data(); const member = members.get(d.uid); if (member && d.status === "completed") { const seconds = Math.max(0, Number(d.durationSeconds) || 0); member.seconds += seconds; if (d.mode === "countdown") member.countdownSeconds += seconds; if (d.mode === "stopwatch") member.stopwatchSeconds += seconds; if (d.username) member.username = d.username; } });
         const profiles = await Promise.all([...members.keys()].map(uid => getDoc(doc(db, "publicProfiles", uid))));
-        profiles.forEach(p => { if (p.exists() && members.has(p.id)) members.get(p.id).username = p.data().username || members.get(p.id).username; });
+        const ownerUids = new Set();
+        profiles.forEach(p => { if (p.exists() && members.has(p.id)) { members.get(p.id).username = p.data().username || members.get(p.id).username; if (p.data().isOwner === true) ownerUids.add(p.id); } });
         const ranked = [...members.values()].sort((a,b) => b.seconds-a.seconds);
         list.replaceChildren();
-        ranked.forEach((member, i) => { const row = document.createElement("div"); row.className = "friend-list-row"; const name = document.createElement("strong"); name.textContent = `${i+1}. ${member.username}${member.uid === auth.currentUser.uid ? " (YOU)" : ""}`; const time = document.createElement("small"); time.textContent = formatChallengeTime(member.seconds); row.append(name,time); list.append(row); });
+        ranked.forEach((member, i) => { const row = document.createElement("div"); row.className = "friend-list-row"; const name = document.createElement("strong"); name.textContent = `${i+1}. ${member.username}${member.uid === auth.currentUser.uid ? " (YOU)" : ""}`; if (ownerUids.has(member.uid)) appendOwnerTag(name, "👑 OWNER"); const time = document.createElement("small"); time.textContent = `${formatChallengeTime(member.seconds)}  |  ⏳ ${formatChallengeTime(member.countdownSeconds)}  |  ⏱ ${formatChallengeTime(member.stopwatchSeconds)}`; time.title = "Total study time | Countdown | Stopwatch"; row.append(name,time); list.append(row); });
     } catch (error) { console.error(error); list.textContent = `Could not calculate ranking (${error.code || error.message}).`; }
 }
 
@@ -1669,14 +1734,14 @@ async function loadTodoList() {
         items.forEach(item => {
             const row = document.createElement("div"); row.className = `todo-note-row${item.completed ? " is-completed" : ""}`;
             const check = document.createElement("button"); check.type = "button"; check.className = "todo-check"; check.textContent = item.completed ? "✓" : ""; check.setAttribute("aria-label", item.completed ? "Mark task as not completed" : "Mark task as completed");
-            check.addEventListener("click", async () => { try { await updateDoc(doc(db,"users",auth.currentUser.uid,"todos",item.id),{completed:!item.completed,updatedAt:serverTimestamp()}); await loadTodoList(); } catch(e) { alert(e.message); } });
+            check.addEventListener("click", async () => { try { await updateDoc(doc(db,"users",auth.currentUser.uid,"todos",item.id),{completed:!item.completed,updatedAt:serverTimestamp()}); await loadTodoList(); } catch(e) { appAlert(e.message); } });
             const content = document.createElement("div"); content.className = "todo-content";
             const title = document.createElement("strong"); title.textContent = item.title || "Untitled task";
             const note = document.createElement("small"); note.textContent = item.note || "";
             const due = document.createElement("small");
             if (item.dueAt) { const time = new Date(item.dueAt); const remaining = time.getTime()-Date.now(); due.textContent = remaining < 0 && !item.completed ? `Overdue • ${time.toLocaleString()}` : `Due • ${time.toLocaleString()}`; due.classList.toggle("todo-overdue", remaining < 0 && !item.completed); }
             content.append(title); if (item.note) content.append(note); if (item.dueAt) content.append(due);
-            const del = document.createElement("button"); del.type = "button"; del.className = "todo-delete"; del.textContent = "×"; del.title = "Delete task"; del.addEventListener("click", async () => { try { await deleteDoc(doc(db,"users",auth.currentUser.uid,"todos",item.id)); await loadTodoList(); } catch(e) { alert(e.message); } });
+            const del = document.createElement("button"); del.type = "button"; del.className = "todo-delete"; del.textContent = "×"; del.title = "Delete task"; del.addEventListener("click", async () => { try { await deleteDoc(doc(db,"users",auth.currentUser.uid,"todos",item.id)); await loadTodoList(); } catch(e) { appAlert(e.message); } });
             row.append(check,content,del); list.append(row);
         });
     } catch (error) { console.error(error); list.textContent = `Could not load tasks (${error.code || error.message}).`; }

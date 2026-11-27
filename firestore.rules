@@ -9,22 +9,22 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow create: if owner(userId)
-        && request.resource.data.keys().hasOnly(['username','email','createdAt','xp','streak','status','avatarUrl','coverUrl','ownerIntroSeen'])
+        && request.resource.data.keys().hasOnly(['username','email','createdAt','xp','streak','status','avatarUrl','coverUrl','ownerSuggestionSeen','ownerSuggestionSeenAt'])
         && request.resource.data.username is string
         && request.resource.data.username.size() >= 3
         && request.resource.data.username.size() <= 20
         && request.resource.data.email == request.auth.token.email
-        && request.resource.data.ownerIntroSeen == false
         && (!('avatarUrl' in request.resource.data) || request.resource.data.avatarUrl is string)
         && (!('coverUrl' in request.resource.data) || (request.resource.data.coverUrl is string && request.resource.data.coverUrl.size() <= 2000));
       allow read: if owner(userId);
       allow update: if owner(userId)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['username','avatarUrl','coverUrl','email','ownerIntroSeen'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['username','avatarUrl','coverUrl','email','ownerSuggestionSeen','ownerSuggestionSeenAt'])
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['username']) || (request.resource.data.username is string && request.resource.data.username.size() >= 3 && request.resource.data.username.size() <= 20))
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['avatarUrl']) || (request.resource.data.avatarUrl is string && request.resource.data.avatarUrl.size() <= 2000))
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['coverUrl']) || (request.resource.data.coverUrl is string && request.resource.data.coverUrl.size() <= 2000))
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['email']) || request.resource.data.email == request.auth.token.email)
-        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerIntroSeen']) || (resource.data.ownerIntroSeen == false && request.resource.data.ownerIntroSeen == true));
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerSuggestionSeen']) || request.resource.data.ownerSuggestionSeen is bool)
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerSuggestionSeenAt']) || request.resource.data.ownerSuggestionSeenAt == request.time);
       allow delete: if false;
 
       match /friendSettings/{friendUid} {
@@ -65,10 +65,10 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['uid','username','usernameLower','avatarUrl','coverUrl','isOwner','updatedAt'])
         && request.resource.data.keys().hasAll(['uid','username','usernameLower','avatarUrl','coverUrl','updatedAt'])
         && request.resource.data.uid == userId
-        && request.resource.data.isOwner == (request.auth.token.email == 'untiban59@gmail.com')
         && request.resource.data.username is string && request.resource.data.username.size() >= 3 && request.resource.data.username.size() <= 20
         && request.resource.data.usernameLower is string
         && request.resource.data.avatarUrl is string && request.resource.data.avatarUrl.size() <= 2000
+        && (!('isOwner' in request.resource.data) || request.resource.data.isOwner is bool)
         && request.resource.data.coverUrl is string && request.resource.data.coverUrl.size() <= 2000
         && request.resource.data.updatedAt == request.time;
       allow delete: if false;
@@ -113,7 +113,7 @@ service cloud.firestore {
         && request.resource.data.durationSeconds is int && request.resource.data.durationSeconds >= 1 && request.resource.data.durationSeconds <= 604800
         && request.resource.data.pausedSeconds is int && request.resource.data.pausedSeconds >= 0 && request.resource.data.pausedSeconds <= 604800
         && request.time > resource.data.startedAt;
-      allow delete: if false;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid && resource.data.status == 'completed';
     }
 
     match /leagues/{leagueId} {
