@@ -935,11 +935,25 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
     display:flex;
     flex-direction:column;
     align-items:center;
-    justify-content:center;
+    justify-content:flex-start;
     gap:4px;
+    height:100vh;
+    height:100dvh;
+    min-height:100vh;
+    min-height:100dvh;
+    overflow-x:hidden;
+    overflow-y:auto;
+    overscroll-behavior-y:contain;
+    -webkit-overflow-scrolling:touch;
+    touch-action:pan-y;
   }
   .study-timer-section:fullscreen .timer-heading { display:none; }
   .study-timer-section:fullscreen .timer-clock-wrap { width:100%; padding:0; }
+  .study-timer-section:fullscreen .timer-mode-switch,
+  .study-timer-section:fullscreen .timer-setup,
+  .study-timer-section:fullscreen .timer-clock-wrap,
+  .study-timer-section:fullscreen .timer-controls,
+  .study-timer-section:fullscreen .timer-message { flex-shrink:0; }
   .study-timer-section:fullscreen .timer-mode-switch { gap:6px; margin:6px auto; }
   .study-timer-section:fullscreen .timer-mode-btn { grid-template-columns:26px 1fr; column-gap:6px; padding:7px 8px; }
   .study-timer-section:fullscreen .timer-mode-btn > span { width:24px; height:24px; font-size:14px; }
