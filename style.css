@@ -952,3 +952,233 @@ body.fai-open:before{content:"";position:fixed;inset:0;background:rgba(5,5,15,.6
     background: rgba(0, 184, 212, 0.12);
     color: #00d9ff;
 }
+
+/* =========================================
+   FANTZAWYA — TABLET RESPONSIVE FIX
+   Add this block at the VERY END of style.css
+========================================= */
+
+/* Tablets: sidebar + main layout + AI assistant */
+@media screen and (min-width: 761px) and (max-width: 1100px) {
+    /* Keep the desktop sidebar visible and independently scrollable */
+    .sidebar {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        bottom: 0 !important;
+        width: 220px !important;
+        height: 100vh !important;
+        height: 100dvh !important;
+        overflow-x: hidden !important;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+        z-index: 100;
+    }
+
+    .sidebar > * {
+        flex-shrink: 0;
+    }
+
+    .main-content {
+        width: calc(100% - 220px) !important;
+        margin-left: 220px !important;
+        min-width: 0 !important;
+        padding: 24px 20px !important;
+    }
+
+    .content-grid {
+        grid-template-columns: minmax(0, 1.2fr) minmax(190px, .9fr) !important;
+        gap: 16px !important;
+    }
+
+    /* AI launcher: keep it outside the sidebar */
+    .fai-launcher {
+        position: fixed !important;
+        left: 232px !important;
+        right: auto !important;
+        top: 50% !important;
+        bottom: auto !important;
+        transform: translateY(-50%) !important;
+        width: 54px !important;
+        height: 54px !important;
+        z-index: 9995 !important;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    .fai-launcher:active {
+        transform: translateY(-50%) scale(.94) !important;
+    }
+
+    /* AI chat: fit the available tablet height and width */
+    .fai-panel {
+        position: fixed !important;
+        left: 50% !important;
+        top: 50% !important;
+        right: auto !important;
+        bottom: auto !important;
+        transform: translate(-50%, -50%) !important;
+        width: min(480px, calc(100vw - 250px)) !important;
+        height: min(720px, calc(100dvh - 32px)) !important;
+        max-height: calc(100dvh - 32px) !important;
+        min-height: 320px !important;
+        z-index: 9997 !important;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden !important;
+        padding: 0 !important;
+        box-sizing: border-box !important;
+        overscroll-behavior: contain;
+    }
+
+    .fai-panel[hidden] {
+        display: none !important;
+    }
+
+    .fai-messages {
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .fai-compose textarea {
+        min-width: 0 !important;
+        font-size: 16px !important;
+    }
+
+    .fai-header button,
+    .fai-compose button,
+    .fai-suggestions button {
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+    }
+}
+
+/* Narrow tablets / portrait tablets */
+@media screen and (min-width: 761px) and (max-width: 900px) {
+    .sidebar {
+        width: 195px !important;
+    }
+
+    .main-content {
+        width: calc(100% - 195px) !important;
+        margin-left: 195px !important;
+        padding: 20px 15px !important;
+    }
+
+    .content-grid {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+
+    .fai-launcher {
+        left: 204px !important;
+        width: 50px !important;
+        height: 50px !important;
+    }
+
+    .fai-panel {
+        width: min(440px, calc(100vw - 220px)) !important;
+    }
+}
+
+/* Mobile: make sure the mobile dropdown and full-width AI menu item work */
+@media screen and (max-width: 760px) {
+    .sidebar {
+        display: none !important;
+    }
+
+    .mobile-nav {
+        z-index: 9990 !important;
+        pointer-events: auto !important;
+    }
+
+    .mobile-nav-menu {
+        display: none;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        max-height: min(55vh, 390px);
+        overflow-x: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+    }
+
+    .mobile-nav-menu.is-open {
+        display: grid !important;
+    }
+
+    .mobile-nav-menu .fai-nav-link {
+        grid-column: 1 / -1 !important;
+        width: 100% !important;
+        min-width: 0 !important;
+        min-height: 58px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        box-sizing: border-box !important;
+    }
+
+    .fai-panel {
+        width: calc(100vw - 24px) !important;
+        height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) !important;
+        max-height: calc(100dvh - 24px) !important;
+    }
+}
+
+/* Very short screens: preserve usable chat controls */
+@media screen and (max-height: 520px) {
+    .fai-panel {
+        height: calc(100dvh - 16px) !important;
+        max-height: calc(100dvh - 16px) !important;
+    }
+
+    .fai-header {
+        padding: 8px 12px !important;
+    }
+
+    .fai-suggestions {
+        padding: 6px 8px !important;
+    }
+
+    .fai-disclaimer {
+        padding-bottom: 5px !important;
+    }
+}
+/* =========================================
+   FANTZAWYA — MOBILE MENU SCROLL
+========================================= */
+
+@media screen and (max-width: 760px) {
+    .mobile-nav-menu {
+        max-height: calc(100dvh - 150px) !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+
+        -webkit-overflow-scrolling: touch !important;
+        overscroll-behavior-y: contain !important;
+
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, .35) transparent;
+
+        touch-action: pan-y !important;
+        padding-bottom: 12px !important;
+    }
+
+    .mobile-nav-menu > * {
+        flex-shrink: 0;
+    }
+
+    .mobile-nav-menu::-webkit-scrollbar {
+        width: 5px;
+    }
+
+    .mobile-nav-menu::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, .35);
+        border-radius: 10px;
+    }
+
+    .mobile-nav-menu::-webkit-scrollbar-track {
+        background: transparent;
+    }
+}
