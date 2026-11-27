@@ -1498,6 +1498,33 @@ function studyRoomTimestampMillis(value) {
     const parsed = new Date(value).getTime();
     return Number.isFinite(parsed) ? parsed : 0;
 }
+async function saveStudyRoomCompletion(room, uid, endedAtMillis = null) {
+    if (!room?.id || !uid || !(room.memberUids || []).includes(uid)) return false;
+    const startedAtMillis = studyRoomTimestampMillis(room.startedAt);
+    if (!startedAtMillis) return false;
+
+    const completionRef = doc(db, "studyRoomCompletions", `${room.id}_${uid}`);
+    const existing = await getDoc(completionRef);
+    if (existing.exists()) return false; // One completion per member per room.
+
+    const roomEndMillis = studyRoomTimestampMillis(room.endedAt);
+    const requestedEnd = endedAtMillis || roomEndMillis || Date.now();
+    const endMillis = Math.max(startedAtMillis, Math.min(requestedEnd, roomEndMillis || requestedEnd));
+    const durationSeconds = Math.max(0, Math.floor((endMillis - startedAtMillis) / 1000));
+    if (!durationSeconds) return false;
+
+    await setDoc(completionRef, {
+        uid,
+        roomId: room.id,
+        durationSeconds,
+        mode: room.mode || "stopwatch",
+        startedAt: room.startedAt,
+        endedAt: room.endedAt || new Date(endMillis),
+        createdAt: serverTimestamp()
+    });
+    return true;
+}
+
 function studyRoomRemaining(room) {
     // Firestore serverTimestamp can briefly be unresolved in a local snapshot.
     // Never interpret a missing start timestamp as an already-finished session.
@@ -1549,7 +1576,7 @@ async function initStudyRooms(uid) {
             info.append(name,meta); const status=document.createElement("span"); status.className=`study-room-pill ${d.status || "waiting"}`; status.textContent=d.status === "active" ? "LIVE" : d.status === "completed" ? "DONE" : "WAITING"; row.append(info,status); row.addEventListener("click",()=>openStudyRoom(item.id));
             const actions=document.createElement("div"); actions.className="study-room-list-actions";
             if(d.status === "completed" && d.ownerUid === uid){const del=document.createElement("button");del.type="button";del.className="mini-action danger-action";del.textContent="DELETE";del.addEventListener("click",async e=>{e.stopPropagation();if(!confirm("Delete this completed study room?"))return;try{await deleteDoc(doc(db,"studyRooms",item.id));if(activeStudyRoomId===item.id)closeActiveStudyRoom();}catch(err){appAlert(`Could not delete room: ${err.message||err.code}`);}});actions.append(del);}
-            else if(d.ownerUid !== uid){const leave=document.createElement("button");leave.type="button";leave.className="mini-action";leave.textContent="LEAVE";leave.addEventListener("click",async e=>{e.stopPropagation();if(!confirm("Leave this study room?"))return;try{await updateDoc(doc(db,"studyRooms",item.id),{memberUids:arrayRemove(uid)});if(activeStudyRoomId===item.id)closeActiveStudyRoom();}catch(err){appAlert(`Could not leave room: ${err.message||err.code}`);}});actions.append(leave);}
+            else if(d.ownerUid !== uid){const leave=document.createElement("button");leave.type="button";leave.className="mini-action";leave.textContent="LEAVE";leave.addEventListener("click",async e=>{e.stopPropagation();if(!confirm("Leave this study room?"))return;try{if(d.status === "active") await saveStudyRoomCompletion({id:item.id,...d},uid,Date.now());await updateDoc(doc(db,"studyRooms",item.id),{memberUids:arrayRemove(uid)});if(activeStudyRoomId===item.id)closeActiveStudyRoom();}catch(err){appAlert(`Could not leave room: ${err.message||err.code}`);}});actions.append(leave);}
             row.append(actions); list.append(row);
         });
         if (!activeStudyRoomId && snap.docs.length) openStudyRoom(snap.docs[0].id);
@@ -1585,13 +1612,13 @@ async function createStudyRoom(){
     finally{btn.disabled=false;}
 }
 async function respondStudyInvite(inviteId,roomId,accept){
-    try{const inviteRef=doc(db,"studyRoomInvites",inviteId);await updateDoc(inviteRef,{status:accept?"accepted":"declined",respondedAt:serverTimestamp()});if(accept){await updateDoc(doc(db,"studyRooms",roomId),{memberUids:arrayUnion(auth.currentUser.uid)});await openStudyRoom(roomId);}}
+    try{const inviteRef=doc(db,"studyRoomInvites",inviteId);if(accept){const roomRef=doc(db,"studyRooms",roomId);const roomSnap=await getDoc(roomRef);if(!roomSnap.exists()||roomSnap.data().status!=="waiting")throw new Error("This room has already started or ended. You can only join before the host starts it.");await updateDoc(roomRef,{memberUids:arrayUnion(auth.currentUser.uid)});}await updateDoc(inviteRef,{status:accept?"accepted":"declined",respondedAt:serverTimestamp()});if(accept)await openStudyRoom(roomId);}
     catch(error){console.error(error);appAlert(`Could not ${accept?"join":"decline"} invitation: ${error.message||error.code}`);}
 }
 async function openStudyRoom(roomId){
     if(activeStudyRoomUnsubscribe)activeStudyRoomUnsubscribe();activeStudyRoomId=roomId;
     const panel=document.getElementById("studyRoomLivePanel");panel.hidden=false;document.getElementById("studyLiveRoomTitle").textContent="Loading room...";
-    activeStudyRoomUnsubscribe=onSnapshot(doc(db,"studyRooms",roomId),snap=>{if(!snap.exists()){panel.hidden=true;return;}activeStudyRoomData={id:snap.id,...snap.data()};renderStudyRoom();},error=>{console.error(error);document.getElementById("studyLiveNotice").textContent="Could not sync this room.";});
+    activeStudyRoomUnsubscribe=onSnapshot(doc(db,"studyRooms",roomId),snap=>{if(!snap.exists()){panel.hidden=true;return;}activeStudyRoomData={id:snap.id,...snap.data()};renderStudyRoom();if(activeStudyRoomData.status==="completed"){saveStudyRoomCompletion(activeStudyRoomData,auth.currentUser?.uid).catch(error=>console.error("Could not save Study Session completion:",error));}},error=>{console.error(error);document.getElementById("studyLiveNotice").textContent="Could not sync this room.";});
     if(!studyRoomTicker)studyRoomTicker=setInterval(tickStudyRoom,1000);
 }
 function renderStudyRoom(){
@@ -1650,7 +1677,7 @@ async function endStudyRoom(auto){
     try{
         const elapsed=Math.max(0,Math.floor((Date.now()-started)/1000));
         const finalSeconds=r.mode==="stopwatch"?elapsed:r.mode==="countdown"?Math.max(0,Number(r.durationSeconds)||0)-remaining:Math.max(0,Math.floor((studyRoomTimestampMillis(r.targetEndAt)-started)/1000));
-        await updateDoc(doc(db,"studyRooms",activeStudyRoomId),{status:"completed",endedAt:serverTimestamp(),finalSeconds,autoEnded:!!auto});
+        await updateDoc(doc(db,"studyRooms",activeStudyRoomId),{status:"completed",endedAt:new Date(),finalSeconds,autoEnded:!!auto});
     }catch(e){console.error(e);if(!auto)appAlert(e.message||"Could not end session.");}
 }
 
@@ -1665,7 +1692,7 @@ if(leaveStudyRoomBtn) leaveStudyRoomBtn.addEventListener("click",async()=>{
     const r=activeStudyRoomData, uid=auth.currentUser?.uid;
     if(!r||!uid||r.ownerUid===uid)return;
     if(!confirm("Leave this study room?"))return;
-    try{await updateDoc(doc(db,"studyRooms",r.id),{memberUids:arrayRemove(uid)});closeActiveStudyRoom();}
+    try{if(r.status === "active") await saveStudyRoomCompletion(r,uid,Date.now());await updateDoc(doc(db,"studyRooms",r.id),{memberUids:arrayRemove(uid)});closeActiveStudyRoom();}
     catch(e){appAlert(`Could not leave room: ${e.message||e.code}`);}
 });
 const deleteStudyRoomBtn=document.getElementById("studyDeleteRoomBtn");
