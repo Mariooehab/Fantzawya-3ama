@@ -43,18 +43,22 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
 #message { min-height: 20px; margin-top: 18px; color: #a78bfa; font-size: 13px; overflow-wrap: anywhere; }
 .footer-text { margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--border); color: #68687f; font-size: 10px; font-weight: 700; letter-spacing: 2px; }
 .dashboard { min-height: 100vh; }
-.sidebar { width: 255px; position: fixed; inset: 0 auto 0 0; z-index: 20; display: flex; flex-direction: column; padding: 28px 18px; background: rgba(13,13,27,.94); border-right: 1px solid var(--border); backdrop-filter: blur(20px); }
+.sidebar { width: 255px; position: fixed; inset: 0 auto 0 0; height: 100vh; height: 100dvh; min-height: 0; z-index: 20; display: flex; flex-direction: column; padding: 22px 18px 16px; background: rgba(13,13,27,.94); border-right: 1px solid var(--border); backdrop-filter: blur(20px); overflow: hidden; }
 .brand { display: flex; align-items: center; gap: 12px; padding: 0 7px 35px; text-decoration: none; color: white; }
 .brand-logo { width: 43px; height: 43px; flex-shrink: 0; border-radius: 13px; font-size: 20px; }
 .brand strong { display: block; font-size: 14px; letter-spacing: 1px; }
 .brand small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; letter-spacing: 1.2px; }
 .sidebar-label { padding: 0 12px; margin-bottom: 12px; color: #65657e; font-size: 10px; font-weight: 800; letter-spacing: 2px; }
-.side-nav { display: grid; gap: 8px; }
+.side-nav { display: flex; flex: 1 1 auto; flex-direction: column; gap: 8px; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; scrollbar-width: thin; scrollbar-color: rgba(180,150,255,.45) transparent; padding: 2px 4px 12px 0; }
+.side-nav::-webkit-scrollbar { width: 5px; }
+.side-nav::-webkit-scrollbar-thumb { background: rgba(180,150,255,.45); border-radius: 10px; }
+.side-nav::-webkit-scrollbar-track { background: transparent; }
+.side-nav .nav-link { flex: 0 0 auto; }
 .nav-link { display: flex; align-items: center; gap: 13px; padding: 13px 14px; border: 1px solid transparent; border-radius: 11px; color: #9999b1; text-decoration: none; font-size: 13px; font-weight: 600; transition: .2s; }
 .nav-link span { width: 20px; text-align: center; font-size: 19px; }
 .nav-link:hover, .nav-link.active { color: white; background: rgba(139,92,246,.13); border-color: rgba(139,92,246,.15); }
 .nav-link.active span { color: #b69aff; }
-.sidebar-bottom { margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border); }
+.sidebar-bottom { flex: 0 0 auto; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border); }
 .sidebar-user { display: flex; align-items: center; gap: 11px; padding: 8px 4px 15px; min-width: 0; }
 .avatar { width: 39px; height: 39px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: 13px; background: var(--gradient); font-size: 16px; font-weight: 900; text-transform: uppercase; }
 .user-details { min-width: 0; }
@@ -896,63 +900,9 @@ body.fai-open:before{content:"";position:fixed;inset:0;background:rgba(5,5,15,.6
 .fai-message{max-width:90%;padding:10px 12px;border-radius:13px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.6}.fai-message.assistant{align-self:flex-start;background:#25233d;border:1px solid #ffffff12}.fai-message.user{align-self:flex-end;background:#6245b6;color:#fff}.fai-message.pending{opacity:.7;font-style:italic}
 .fai-compose{display:flex;gap:8px;padding:10px;border-top:1px solid #ffffff18;flex-shrink:0}.fai-compose textarea{resize:none;min-width:0;flex:1;background:#1d1c31;color:#fff;border:1px solid #514675;border-radius:12px;padding:10px;font:inherit;font-size:13px;outline:none}.fai-compose button{border:0;border-radius:11px;background:#8a63ed;color:#fff;padding:0 14px;font-weight:800;cursor:pointer}.fai-compose button:disabled{opacity:.5;cursor:wait}.fai-disclaimer{padding:0 12px 10px;display:block;text-align:center;flex-shrink:0}
 @media(max-width:600px){.fai-launcher{left:10px;right:auto;top:50%;bottom:auto;transform:translateY(-50%);width:56px;height:56px;font-size:26px}.fai-panel{width:calc(100vw - 24px);height:min( min(680px, 82dvh), calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));max-height:calc(100dvh - 24px);border-radius:18px}.fai-compose{padding:8px}.fai-suggestions{padding:8px}}
-/* AI Button inside Mobile Navigation */
-.mobile-nav-menu .fai-nav-link {
-    grid-column: 1 / -1 !important;
-    width: 100% !important;
-    min-height: 58px;
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    border: 1px solid rgba(0, 184, 212, 0.35);
-    border-radius: 12px;
-    background: linear-gradient(
-        135deg,
-        rgba(0, 184, 212, 0.16),
-        rgba(120, 75, 255, 0.16)
-    );
-    color: #fff;
-    cursor: pointer;
-}
-
-.mobile-nav-menu .fai-nav-link span {
-    font-size: 21px;
-    color: #00d9ff;
-}
-
-.mobile-nav-menu .fai-nav-link small {
-    font-size: 14px;
-    font-weight: 800;
-    letter-spacing: 1.5px;
-}
-
-.mobile-nav-menu .fai-nav-link:hover {
-    background: linear-gradient(
-        135deg,
-        rgba(0, 184, 212, 0.28),
-        rgba(120, 75, 255, 0.28)
-    );
-    border-color: #00b8d4;
-}
 
 
-.fai-desktop-link {
-    width: 100%;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-    font: inherit;
-}
-
-.fai-desktop-link:hover {
-    background: rgba(0, 184, 212, 0.12);
-    color: #00d9ff;
-}
-
+/* ===== Tablet and mobile responsive fixes ===== */
 /* =========================================
    FANTZAWYA — TABLET RESPONSIVE FIX
    Add this block at the VERY END of style.css
@@ -960,25 +910,7 @@ body.fai-open:before{content:"";position:fixed;inset:0;background:rgba(5,5,15,.6
 
 /* Tablets: sidebar + main layout + AI assistant */
 @media screen and (min-width: 761px) and (max-width: 1100px) {
-    /* Keep the desktop sidebar visible and independently scrollable */
-    .sidebar {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        bottom: 0 !important;
-        width: 220px !important;
-        height: 100vh !important;
-        height: 100dvh !important;
-        overflow-x: hidden !important;
-        overflow-y: auto !important;
-        -webkit-overflow-scrolling: touch;
-        overscroll-behavior: contain;
-        z-index: 100;
-    }
-
-    .sidebar > * {
-        flex-shrink: 0;
-    }
+    /* Sidebar scrolling is handled by the shared layout rules above. */
 
     .main-content {
         width: calc(100% - 220px) !important;
@@ -1145,40 +1077,107 @@ body.fai-open:before{content:"";position:fixed;inset:0;background:rgba(5,5,15,.6
         padding-bottom: 5px !important;
     }
 }
-/* =========================================
-   FANTZAWYA — MOBILE MENU SCROLL
-========================================= */
 
-@media screen and (max-width: 760px) {
-    .mobile-nav-menu {
-        max-height: calc(100dvh - 150px) !important;
-        overflow-y: auto !important;
-        overflow-x: hidden !important;
 
-        -webkit-overflow-scrolling: touch !important;
-        overscroll-behavior-y: contain !important;
+/* Fantzawya AI launchers */
+.fai-desktop-link { width: calc(100% - 24px); margin: 8px 12px 12px; text-align: left; border: 1px solid rgba(167,139,250,.28); background: rgba(139,92,246,.12); color: #e8ddff; }
+.fai-desktop-link:hover { background: rgba(139,92,246,.22); }
+.fai-nav-link { border: 1px solid rgba(167,139,250,.28) !important; background: rgba(139,92,246,.15) !important; color: #e8ddff !important; }
+@media (max-width: 760px) { .fai-desktop-link { display:none !important; } }
 
-        scrollbar-width: thin;
-        scrollbar-color: rgba(255, 255, 255, .35) transparent;
 
-        touch-action: pan-y !important;
-        padding-bottom: 12px !important;
-    }
+/* AI Button inside Mobile Navigation */
+.mobile-nav-menu .fai-nav-link {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    min-height: 58px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    border: 1px solid rgba(0, 184, 212, 0.35);
+    border-radius: 12px;
+    background: linear-gradient(
+        135deg,
+        rgba(0, 184, 212, 0.16),
+        rgba(120, 75, 255, 0.16)
+    );
+    color: #fff;
+    cursor: pointer;
+}
 
-    .mobile-nav-menu > * {
-        flex-shrink: 0;
-    }
+.mobile-nav-menu .fai-nav-link span {
+    font-size: 21px;
+    color: #00d9ff;
+}
 
-    .mobile-nav-menu::-webkit-scrollbar {
-        width: 5px;
-    }
+.mobile-nav-menu .fai-nav-link small {
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 1.5px;
+}
 
-    .mobile-nav-menu::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, .35);
-        border-radius: 10px;
-    }
+.mobile-nav-menu .fai-nav-link:hover {
+    background: linear-gradient(
+        135deg,
+        rgba(0, 184, 212, 0.28),
+        rgba(120, 75, 255, 0.28)
+    );
+    border-color: #00b8d4;
+}
 
-    .mobile-nav-menu::-webkit-scrollbar-track {
-        background: transparent;
-    }
+.mobile-nav-menu .fai-nav-link {
+    justify-content: center !important;
+    align-items: center !important;
+    text-align: center !important;
+}
+
+.mobile-nav-menu .fai-nav-link span,
+.mobile-nav-menu .fai-nav-link small {
+    text-align: center !important;
+    margin: 0 !important;
+}
+
+/* Fullscreen Study Timer */
+#studyTimer.timer-fullscreen {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 30px !important;
+    border-radius: 0 !important;
+    z-index: 999999 !important;
+    overflow-y: auto !important;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: #080812 !important;
+}
+
+#studyTimer.timer-fullscreen .timer-heading,
+#studyTimer.timer-fullscreen .timer-mode-switch,
+#studyTimer.timer-fullscreen .timer-setup,
+#studyTimer.timer-fullscreen .timer-clock-wrap,
+#studyTimer.timer-fullscreen .timer-controls,
+#studyTimer.timer-fullscreen .timer-message {
+    width: 100%;
+    max-width: 750px;
+}
+
+#studyTimer.timer-fullscreen .timer-clock-wrap {
+    transform: scale(1.2);
+    margin: 35px 0;
+}
+
+#studyTimer.timer-fullscreen .timer-heading {
+    margin-bottom: 25px;
+}
+
+body.timer-is-fullscreen {
+    overflow: hidden !important;
 }

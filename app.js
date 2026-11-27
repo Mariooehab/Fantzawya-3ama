@@ -1797,6 +1797,57 @@ timerFinishBtn.addEventListener("click", () => finishStudySession(false));
 timerResetBtn.addEventListener("click", resetStudySession);
 
 
+/* WEBSITE FULLSCREEN TOGGLE
+   Adds a button to the dashboard header. It enters true browser fullscreen
+   for the whole website and changes into an Exit Fullscreen button. */
+(() => {
+    const topbar = document.querySelector(".topbar");
+    if (!topbar || document.getElementById("websiteFullscreenBtn")) return;
+
+    const fullscreenBtn = document.createElement("button");
+    fullscreenBtn.type = "button";
+    fullscreenBtn.id = "websiteFullscreenBtn";
+    fullscreenBtn.className = "website-fullscreen-btn";
+    fullscreenBtn.innerHTML = '<span aria-hidden="true">⛶</span> <span class="fullscreen-label">Full Screen</span>';
+    fullscreenBtn.setAttribute("aria-label", "Enter full screen");
+    fullscreenBtn.title = "Enter full screen";
+    fullscreenBtn.style.cssText = [
+        "display:inline-flex", "align-items:center", "justify-content:center",
+        "gap:7px", "min-height:38px", "padding:8px 12px", "border:1px solid rgba(255,255,255,.16)",
+        "border-radius:10px", "background:rgba(255,255,255,.07)", "color:inherit",
+        "font:inherit", "font-size:13px", "font-weight:700", "cursor:pointer",
+        "white-space:nowrap", "flex:0 0 auto"
+    ].join(";");
+
+    const userArea = topbar.querySelector(".topbar-user");
+    (userArea || topbar).prepend(fullscreenBtn);
+
+    const updateFullscreenButton = () => {
+        const active = Boolean(document.fullscreenElement);
+        fullscreenBtn.innerHTML = active
+            ? '<span aria-hidden="true">✕</span> <span class="fullscreen-label">Exit Full Screen</span>'
+            : '<span aria-hidden="true">⛶</span> <span class="fullscreen-label">Full Screen</span>';
+        fullscreenBtn.setAttribute("aria-label", active ? "Exit full screen" : "Enter full screen");
+        fullscreenBtn.title = active ? "Exit full screen (Esc)" : "Enter full screen";
+    };
+
+    fullscreenBtn.addEventListener("click", async () => {
+        try {
+            if (document.fullscreenElement) {
+                await document.exitFullscreen();
+            } else {
+                await document.documentElement.requestFullscreen();
+            }
+        } catch (error) {
+            console.error("Fullscreen could not be changed:", error);
+            appAlert("Your browser could not enable full screen. Try using the browser's full-screen shortcut (F11).");
+        }
+    });
+
+    document.addEventListener("fullscreenchange", updateFullscreenButton);
+    updateFullscreenButton();
+})();
+
 /* RESTORE AUTH SESSION */
 onAuthStateChanged(auth, async user => {
     if (authFlowInProgress) return;
