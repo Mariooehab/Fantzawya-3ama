@@ -86,6 +86,16 @@ const timerResetBtn = document.getElementById("timerResetBtn");
 const timerMessage = document.getElementById("timerMessage");
 
 let currentProfile = null;
+const OWNER_EMAIL = "untiban59@gmail.com";
+const isOwnerAccount = user => (user?.email || "").trim().toLowerCase() === OWNER_EMAIL;
+function addOwnerTag(target, className = "owner-tag") {
+    if (!target || target.querySelector(`.${className}`)) return;
+    const tag = document.createElement("span");
+    tag.className = className;
+    tag.textContent = "👑 OWNER & MAKER";
+    tag.setAttribute("aria-label", "Website owner and maker");
+    target.append(tag);
+}
 let authFlowInProgress = false;
 let countdownInterval = null;
 let timerInterval = null;
@@ -145,7 +155,8 @@ registerForm.addEventListener("submit", async event => {
             streak: 0,
             status: "online",
             avatarUrl: "",
-            coverUrl: ""
+            coverUrl: "",
+            ownerIntroSeen: false
         });
         await setDoc(doc(db, "publicProfiles", result.user.uid), {
             uid: result.user.uid,
@@ -153,11 +164,12 @@ registerForm.addEventListener("submit", async event => {
             usernameLower: username.toLowerCase(),
             avatarUrl: "",
             coverUrl: "",
+            isOwner: isOwnerAccount(result.user),
             updatedAt: serverTimestamp()
         });
         registerForm.reset();
         showMessage("Account created successfully!");
-        await loadDashboard(result.user);
+        await loadDashboard(result.user, { showOwnerIntro: true });
     } catch (error) {
         console.error("Registration error:", error);
         const errors = {
@@ -212,7 +224,7 @@ loginForm.addEventListener("submit", async event => {
 
 
 /* DASHBOARD */
-async function loadDashboard(user) {
+async function loadDashboard(user, options = {}) {
     try {
         const profileSnapshot = await getDoc(doc(db, "users", user.uid));
         if (!profileSnapshot.exists()) {
@@ -230,8 +242,11 @@ async function loadDashboard(user) {
                 usernameLower: (profile.username || "User").toLowerCase(),
                 avatarUrl: profile.avatarUrl || "",
                 coverUrl: profile.coverUrl || "",
+                isOwner: isOwnerAccount(user),
                 updatedAt: serverTimestamp()
             });
+        } else if (isOwnerAccount(user) && publicProfileSnapshot.data().isOwner !== true) {
+            await updateDoc(publicProfileRef, { isOwner: true, updatedAt: serverTimestamp() });
         }
 
         const username = profile.username || "User";
@@ -245,6 +260,19 @@ async function loadDashboard(user) {
         document.getElementById("topbarUsername").textContent = username;
         document.getElementById("profileUsername").textContent = username;
         document.getElementById("profileEmail").textContent = email;
+        ["sidebarUsername", "topbarUsername", "profileUsername"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.classList.toggle("is-site-owner", isOwnerAccount(user));
+        });
+        const profileBadge = document.querySelector(".profile-badge");
+        if (profileBadge) {
+            profileBadge.textContent = isOwnerAccount(user) ? "👑 WEBSITE OWNER & MAKER" : "COMMUNITY MEMBER";
+            profileBadge.classList.toggle("owner-profile-badge", isOwnerAccount(user));
+        }
+        ["sidebarAvatar", "topbarAvatar", "profileAvatar"].forEach(id => {
+            const avatar = document.getElementById(id);
+            if (avatar) avatar.classList.toggle("owner-avatar", isOwnerAccount(user));
+        });
         document.getElementById("xpValue").textContent = xp.toLocaleString();
         document.getElementById("streakValue").textContent = streak;
         document.getElementById("profileXP").textContent = `${xp.toLocaleString()} XP`;
@@ -268,6 +296,9 @@ async function loadDashboard(user) {
         await loadCommunityFeatures(user.uid);
         await loadFriends(user.uid);
         await restoreStudySession(user.uid);
+        if (options.showOwnerIntro && profile.ownerIntroSeen !== true) {
+            await showOwnerWelcome(user);
+        }
     } catch (error) {
         console.error("Dashboard error:", error);
         authContainer.hidden = false;
@@ -342,6 +373,98 @@ mobileNavMenu.querySelectorAll("a[data-page]").forEach(link => {
     });
 });
 
+
+/* NEW MEMBER OWNER INTRO */
+async function showOwnerWelcome(user) {
+    const modal = ensureOwnerWelcomeModal();
+    const title = modal.querySelector("#ownerWelcomeName");
+    const avatar = modal.querySelector("#ownerWelcomeAvatar");
+    const tag = modal.querySelector("#ownerWelcomeTag");
+    const addButton = modal.querySelector("#ownerWelcomeAdd");
+    const skipButton = modal.querySelector("#ownerWelcomeSkip");
+    const status = modal.querySelector("#ownerWelcomeStatus");
+
+    try {
+        const owners = await getDocs(query(collection(db, "publicProfiles"), where("isOwner", "==", true)));
+        const ownerDoc = owners.docs.find(item => item.id !== user.uid) || owners.docs[0];
+        if (!ownerDoc) return;
+        const owner = { ...ownerDoc.data(), uid: ownerDoc.id };
+        title.textContent = owner.username || "Website Owner";
+        tag.textContent = "👑 WEBSITE OWNER & MAKER";
+        if (owner.avatarUrl) {
+            avatar.style.backgroundImage = `url("${owner.avatarUrl}")`;
+            avatar.classList.add("has-photo");
+            avatar.textContent = "";
+        } else {
+            avatar.style.backgroundImage = "";
+            avatar.classList.remove("has-photo");
+            avatar.textContent = (owner.username || "O").charAt(0).toUpperCase();
+        }
+        if (owner.coverUrl) modal.querySelector(".owner-welcome-cover").style.backgroundImage = `url("${owner.coverUrl}")`;
+
+        modal.hidden = false;
+        const finish = async () => {
+            try {
+                await updateDoc(doc(db, "users", user.uid), { ownerIntroSeen: true });
+                currentProfile = { ...currentProfile, ownerIntroSeen: true };
+            } catch (error) {
+                console.error("Could not save owner intro state:", error);
+                status.textContent = "Could not save this choice. It may appear again next time.";
+            }
+            modal.hidden = true;
+        };
+        skipButton.onclick = finish;
+        addButton.onclick = async () => {
+            addButton.disabled = true;
+            addButton.textContent = "SENDING...";
+            try {
+                const sent = await sendFriendRequest(owner, addButton);
+                if (sent || addButton.textContent === "REQUEST EXISTS") {
+                    status.textContent = sent ? "Friend request sent to the Owner!" : "You already have a connection with the Owner.";
+                    await finish();
+                } else {
+                    addButton.disabled = false;
+                    addButton.textContent = "ADD OWNER";
+                    status.textContent = "Could not send request. You can try again from Friends.";
+                }
+            } catch (error) {
+                status.textContent = error.message || "Could not send request. Try again from Friends.";
+                addButton.disabled = false;
+                addButton.textContent = "ADD OWNER";
+            }
+        };
+        modal.querySelector("[data-close-owner-welcome]").onclick = finish;
+    } catch (error) {
+        console.error("Owner welcome popup error:", error);
+    }
+}
+
+function ensureOwnerWelcomeModal() {
+    let modal = document.getElementById("ownerWelcomeModal");
+    if (modal) return modal;
+    modal = document.createElement("div");
+    modal.id = "ownerWelcomeModal";
+    modal.className = "owner-welcome-modal";
+    modal.hidden = true;
+    modal.innerHTML = `<div class="owner-welcome-backdrop" data-close-owner-welcome></div>
+      <section class="owner-welcome-card" role="dialog" aria-modal="true" aria-labelledby="ownerWelcomeHeading">
+        <button class="owner-welcome-close" type="button" data-close-owner-welcome aria-label="Close">×</button>
+        <div class="owner-welcome-cover"></div>
+        <div class="owner-welcome-avatar" id="ownerWelcomeAvatar">O</div>
+        <div class="owner-welcome-kicker">WELCOME TO FANTZAWYA</div>
+        <h2 id="ownerWelcomeHeading">Meet the Owner</h2>
+        <h3 id="ownerWelcomeName">Website Owner</h3>
+        <div class="owner-welcome-tag" id="ownerWelcomeTag">👑 WEBSITE OWNER & MAKER</div>
+        <p class="owner-welcome-copy"We'd love to introduce you to the person who founded and develops Fantzawya. You can send him a friend request and connect with him directly within the community.</p>
+        <div class="owner-welcome-actions">
+          <button type="button" class="owner-welcome-add" id="ownerWelcomeAdd">ADD OWNER</button>
+          <button type="button" class="owner-welcome-skip" id="ownerWelcomeSkip">Maybe later</button>
+        </div>
+        <p class="owner-welcome-status" id="ownerWelcomeStatus" aria-live="polite"></p>
+      </section>`;
+    document.body.append(modal);
+    return modal;
+}
 
 /* PROFILE + FRIENDS */
 function applyAvatar(url, fallbackInitial) {
@@ -422,6 +545,7 @@ if (saveProfileBtn) saveProfileBtn.addEventListener("click", async () => {
             usernameLower,
             avatarUrl,
             coverUrl,
+            isOwner: isOwnerAccount(user),
             updatedAt: serverTimestamp()
         });
 
@@ -575,6 +699,7 @@ async function searchFriend() {
         if (person.avatarUrl) { avatar.style.backgroundImage = `url("${person.avatarUrl}")`; avatar.classList.add("has-photo"); }
         else avatar.textContent = (person.username || "U").charAt(0).toUpperCase();
         const name = document.createElement("strong"); name.textContent = person.username;
+        if (person.isOwner) { const tag = document.createElement("span"); tag.className = "owner-tag"; tag.textContent = "👑 OWNER"; name.append(" ", tag); }
         const add = document.createElement("button"); add.type = "button"; add.className = "community-action-btn"; add.textContent = "ADD FRIEND";
         add.addEventListener("click", () => sendFriendRequest(person, add));
         card.append(avatar, name, add); result.append(card);
@@ -593,7 +718,7 @@ async function sendFriendRequest(person, button) {
         const existingA = await getDocs(query(collection(db, "friendRequests"), where("senderUid", "==", user.uid), where("recipientUid", "==", person.uid)));
         const existingB = await getDocs(query(collection(db, "friendRequests"), where("senderUid", "==", person.uid), where("recipientUid", "==", user.uid)));
         if ([...existingA.docs, ...existingB.docs].some(item => ["pending", "accepted"].includes(item.data().status))) {
-            button.textContent = "REQUEST EXISTS"; return;
+            button.textContent = "REQUEST EXISTS"; return false;
         }
         await addDoc(collection(db, "friendRequests"), {
             senderUid: user.uid,
@@ -607,10 +732,12 @@ async function sendFriendRequest(person, button) {
         });
         button.textContent = "REQUEST SENT";
         await loadFriends(user.uid);
+        return true;
     } catch (error) {
         console.error("Friend request error:", error);
         button.disabled = false;
         alert(error.code === "permission-denied" ? "Firestore denied this request. Publish the updated Rules." : error.message);
+        return false;
     }
 }
 
@@ -663,6 +790,7 @@ async function loadFriends(uid) {
             else avatar.textContent = (person.username || "U").charAt(0).toUpperCase();
             const details = document.createElement("span"); details.className = "friend-identity-text";
             const label = document.createElement("strong"); label.textContent = person.username || "Friend";
+            if (person.isOwner) { const tag = document.createElement("span"); tag.className = "owner-tag"; tag.textContent = "👑 OWNER"; label.append(" ", tag); }
             const handle = document.createElement("small"); handle.textContent = `@${person.username || "member"}`;
             details.append(label, handle); identity.append(avatar, details);
             identity.addEventListener("click", () => openFriendProfile(person, isFavorite));
@@ -708,7 +836,10 @@ async function openFriendProfile(person, favorite) {
     const avatar = document.getElementById("friendProfileAvatar");
     avatar.style.backgroundImage = person.avatarUrl ? `url("${String(person.avatarUrl).replace(/["\\]/g, "")}")` : "";
     avatar.textContent = person.avatarUrl ? "" : (person.username || "U").charAt(0).toUpperCase();
-    document.getElementById("friendProfileName").textContent = person.username || "Friend";
+    const friendName = document.getElementById("friendProfileName");
+    friendName.textContent = person.username || "Friend";
+    if (person.isOwner) { const tag = document.createElement("span"); tag.className = "owner-tag owner-tag-large"; tag.textContent = "👑 WEBSITE OWNER & MAKER"; friendName.append(" ", tag); }
+    avatar.classList.toggle("owner-avatar", !!person.isOwner);
     document.getElementById("friendProfileUsername").textContent = `@${person.username || "member"}`;
     const statsBox = document.getElementById("friendProfileStats");
     statsBox.innerHTML = '<div class="friend-stat-card"><strong>...</strong><span>STUDY HOURS</span></div><div class="friend-stat-card"><strong>...</strong><span>DAY STREAK 🔥</span></div><div class="friend-stat-card"><strong>...</strong><span>SESSIONS</span></div><div class="friend-stat-card"><strong>...</strong><span>BEST STREAK</span></div>';

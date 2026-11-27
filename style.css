@@ -529,67 +529,36 @@ input:focus { border-color: var(--purple); background: rgba(139,92,246,.07); box
 .site-modal-confirm { border:1px solid rgba(248,113,145,.25); background:linear-gradient(120deg,#a83c69,#e05278); color:white; }
 @keyframes siteModalFade { from {opacity:0} to {opacity:1} }
 
-/* TABLET SIDEBAR - FIX VERTICAL SCROLL */
-@media (min-width: 761px) and (max-width: 1100px) {
 
-    .sidebar {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        bottom: 0 !important;
+/* Verified owner identity styling */
+.owner-tag { display:inline-flex; align-items:center; vertical-align:middle; margin-left:6px; padding:3px 7px; border:1px solid rgba(245,197,66,.38); border-radius:999px; background:linear-gradient(120deg,rgba(245,197,66,.18),rgba(255,151,56,.12)); color:#ffd978; font-size:9px; font-weight:900; letter-spacing:.35px; white-space:nowrap; box-shadow:0 0 12px rgba(245,197,66,.1); }
+.owner-tag-large { display:table; margin:8px auto 0; font-size:10px; }
+.owner-profile-badge { color:#ffdc80 !important; border-color:rgba(245,197,66,.42) !important; background:rgba(245,197,66,.12) !important; }
+.owner-avatar { position:relative; outline:2px solid rgba(245,197,66,.9); outline-offset:2px; box-shadow:0 0 0 4px rgba(245,197,66,.12),0 0 18px rgba(245,197,66,.22) !important; }
+.owner-avatar::after { content:"♛"; position:absolute; right:-7px; top:-9px; width:19px; height:19px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.3); border-radius:50%; background:linear-gradient(135deg,#ffe58a,#d99a25); color:#533600; font-size:12px; line-height:1; box-shadow:0 2px 8px rgba(0,0,0,.3); }
+#sidebarUsername.is-site-owner, #topbarUsername.is-site-owner, #profileUsername.is-site-owner { color:#ffe2a0; }
 
-        width: 220px !important;
-        height: 100vh !important;
-        height: 100dvh !important;
 
-        display: flex !important;
-        flex-direction: column !important;
-
-        overflow-y: auto !important;
-        overflow-x: hidden !important;
-
-        min-height: 0 !important;
-        overscroll-behavior-y: contain;
-        -webkit-overflow-scrolling: touch;
-
-        scrollbar-width: thin;
-        scrollbar-color: rgba(167,139,250,.5) transparent;
-    }
-
-    /* Prevent sidebar elements from shrinking */
-    .sidebar > *,
-    .sidebar .brand,
-    .sidebar .sidebar-label,
-    .sidebar .side-nav,
-    .sidebar .sidebar-bottom {
-        flex-shrink: 0 !important;
-    }
-
-    .sidebar .side-nav {
-        display: grid !important;
-        gap: 8px;
-    }
-
-    .sidebar .sidebar-bottom {
-        margin-top: 20px !important;
-        padding-bottom: 20px !important;
-    }
-
-    /* Scrollbar design */
-    .sidebar::-webkit-scrollbar {
-        width: 6px;
-    }
-
-    .sidebar::-webkit-scrollbar-track {
-        background: transparent;
-    }
-
-    .sidebar::-webkit-scrollbar-thumb {
-        background: rgba(167,139,250,.4);
-        border-radius: 20px;
-    }
-
-    .sidebar::-webkit-scrollbar-thumb:hover {
-        background: rgba(167,139,250,.75);
-    }
-}
+/* OWNER INTRO — first visit after registration */
+.owner-welcome-modal { position:fixed; inset:0; z-index:100500; display:grid; place-items:center; padding:18px; }
+.owner-welcome-modal[hidden] { display:none; }
+.owner-welcome-backdrop { position:absolute; inset:0; background:rgba(4,4,12,.82); backdrop-filter:blur(11px); animation:siteModalFade .25s ease; }
+.owner-welcome-card { position:relative; width:min(100%,430px); max-height:min(92vh,760px); overflow:auto; padding:0 25px 24px; border:1px solid rgba(245,197,66,.42); border-radius:25px; background:radial-gradient(ellipse at 50% 0%,rgba(245,197,66,.13),transparent 43%),linear-gradient(145deg,#211d31,#10101e 72%); box-shadow:0 28px 100px rgba(0,0,0,.62),0 0 35px rgba(245,197,66,.12); text-align:center; animation:ownerWelcomeIn .35s cubic-bezier(.2,.8,.2,1); }
+.owner-welcome-cover { height:120px; margin:0 -25px; border-radius:24px 24px 0 0; background:radial-gradient(circle at 25% 20%,rgba(255,220,130,.28),transparent 36%),linear-gradient(120deg,#6a4b1a,#30264b 55%,#10101e) center/cover no-repeat; border-bottom:1px solid rgba(245,197,66,.2); }
+.owner-welcome-close { position:absolute; z-index:2; top:12px; right:13px; width:35px; height:35px; border:1px solid rgba(255,255,255,.15); border-radius:50%; background:rgba(10,10,20,.65); color:#fff; font-size:23px; cursor:pointer; }
+.owner-welcome-avatar { position:relative; display:grid; place-items:center; width:94px; height:94px; margin:-48px auto 13px; border:3px solid #f5c542; border-radius:50%; background:linear-gradient(135deg,#9a762d,#3b2b12) center/cover no-repeat; box-shadow:0 0 0 5px rgba(245,197,66,.12),0 0 28px rgba(245,197,66,.28); color:#fff0bc; font-size:32px; font-weight:900; }
+.owner-welcome-avatar.has-photo { background-size:cover; background-position:center; }
+.owner-welcome-kicker { color:#e7c66d; font-size:9px; font-weight:900; letter-spacing:2.4px; }
+.owner-welcome-card h2 { margin:8px 0 5px; color:#fff; font-size:24px; font-weight:900; }
+.owner-welcome-card h3 { margin:0; color:#ffe5a0; font-size:20px; font-weight:850; }
+.owner-welcome-tag { display:table; margin:10px auto 15px; padding:6px 11px; border:1px solid rgba(245,197,66,.4); border-radius:30px; background:rgba(245,197,66,.12); color:#ffdf83; font-size:9px; font-weight:900; letter-spacing:.8px; }
+.owner-welcome-copy { max-width:330px; margin:0 auto 20px; color:#c2bdd0; font-size:12px; line-height:1.8; }
+.owner-welcome-actions { display:grid; gap:9px; }
+.owner-welcome-add,.owner-welcome-skip { min-height:45px; border-radius:12px; font-size:11px; font-weight:900; cursor:pointer; transition:transform .2s,filter .2s; }
+.owner-welcome-add { border:1px solid rgba(255,230,150,.55); background:linear-gradient(110deg,#f5d36e,#c68b24); color:#352407; box-shadow:0 7px 22px rgba(198,139,36,.2); }
+.owner-welcome-skip { border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.045); color:#c5bfd6; }
+.owner-welcome-add:hover,.owner-welcome-skip:hover { transform:translateY(-1px); filter:brightness(1.08); }
+.owner-welcome-add:disabled { opacity:.65; cursor:wait; }
+.owner-welcome-status { min-height:15px; margin:10px 0 0; color:#e8d08c; font-size:10px; }
+@keyframes ownerWelcomeIn { from { opacity:0; transform:translateY(14px) scale(.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+@media(max-width:480px) { .owner-welcome-card { padding-right:19px; padding-left:19px; } .owner-welcome-cover { margin-right:-19px; margin-left:-19px; } }
