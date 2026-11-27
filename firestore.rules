@@ -68,7 +68,7 @@ service cloud.firestore {
         && request.resource.data.avatarUrl is string && request.resource.data.avatarUrl.size() <= 2000
         && request.resource.data.coverUrl is string && request.resource.data.coverUrl.size() <= 2000
         && request.resource.data.updatedAt == request.time;
-      allow delete: if signedIn() && resource.data.uid == request.auth.uid && resource.data.status == 'completed';
+      allow delete: if false;
     }
 
     match /friendRequests/{requestId} {
@@ -127,18 +127,9 @@ service cloud.firestore {
       allow update: if signedIn()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids'])
         && request.resource.data.memberUids is list
-        && (
-          // Joining: only add the signed-in user.
-          (request.resource.data.memberUids.hasAll(resource.data.memberUids)
-            && request.resource.data.memberUids.hasAll([request.auth.uid])
-            && request.resource.data.memberUids.size() == resource.data.memberUids.size() + 1)
-          ||
-          // Leaving: only remove the signed-in user.
-          (request.auth.uid in resource.data.memberUids
-            && !(request.auth.uid in request.resource.data.memberUids)
-            && resource.data.memberUids.hasAll(request.resource.data.memberUids)
-            && request.resource.data.memberUids.size() == resource.data.memberUids.size() - 1)
-        );
+        && request.resource.data.memberUids.hasAll(resource.data.memberUids)
+        && request.resource.data.memberUids.hasAll([request.auth.uid])
+        && request.resource.data.memberUids.size() == resource.data.memberUids.size() + 1;
       allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
 
       match /tasks/{taskId} {

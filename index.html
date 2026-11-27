@@ -238,14 +238,6 @@
    <p class="profile-email" id="profileEmail">email</p>
    <span class="profile-badge">COMMUNITY MEMBER</span>
    <div class="profile-info"><div><span>Total XP</span><strong id="profileXP">0 XP</strong></div></div>
-   <div class="stats-grid profile-study-stats" style="margin-top:22px">
-    <article class="stat-card"><span class="stat-label">TOTAL STUDY TIME</span><h2 id="profileStudyTime">0s</h2></article>
-    <article class="stat-card"><span class="stat-label">⏳ COUNTDOWN</span><h2 id="profileCountdownTime">0s</h2></article>
-    <article class="stat-card"><span class="stat-label">⏱ STOPWATCH</span><h2 id="profileStopwatchTime">0s</h2></article>
-   </div>
-   <p class="community-note" style="text-align:center"><span id="profileSessionCount">0</span> completed sessions</p>
-   <div style="display:flex;justify-content:center;margin-top:14px"><button class="community-action-btn danger-action" id="resetStudyStatsBtn" type="button">↻ RESET STUDY TIME</button></div>
-   <p class="community-note" id="resetStudyStatsStatus" style="text-align:center">Reset removes your completed study sessions and updates your rankings.</p>
    </div>
    <div class="profile-edit">
     <h4>Customize your profile</h4>
@@ -279,7 +271,21 @@
  </div>
 </section></section><footer class="dashboard-footer">FANTZAWYA 3AMA <span>•</span> STUDY • COMPETE • CONQUER</footer></main>
 </div>
-<nav class="mobile-nav" hidden="" id="mobileNav"><a class="mobile-nav-link active" data-page="overview" href="#overview"><span>⌂</span><small>Home</small></a><a class="mobile-nav-link" data-page="study" href="#study"><span>◴</span><small>Study</small></a><a class="mobile-nav-link" data-page="challenges" href="#challenges"><span>⚡</span><small>Challenges</small></a><a class="mobile-nav-link" data-page="leaderboard" href="#leaderboard"><span>♛</span><small>Ranks</small></a><a class="mobile-nav-link" data-page="friends" href="#friends"><span>♧</span><small>Friends</small></a><a class="mobile-nav-link" data-page="league" href="#league"><span>🏆</span><small>League</small></a><a class="mobile-nav-link" data-page="todo" href="#todo"><span>☑</span><small>Tasks</small></a><a class="mobile-nav-link" data-page="profile" href="#profile"><span>◉</span><small>Profile</small></a><button class="mobile-nav-link" id="mobileLogoutBtn" type="button"><span>↪</span><small>Logout</small></button></nav>
+<nav class="mobile-nav" hidden id="mobileNav" aria-label="Mobile navigation">
+<button class="mobile-nav-toggle" id="mobileNavToggle" type="button" aria-expanded="false" aria-controls="mobileNavMenu"><span class="mobile-nav-menu-icon">☰</span><span class="mobile-nav-current" id="mobileNavCurrent">Menu</span><span class="mobile-nav-chevron">⌄</span></button>
+<div class="mobile-nav-menu" id="mobileNavMenu">
+<a class="mobile-nav-link active" data-page="overview" href="#overview"><span>⌂</span><small>Home</small></a>
+<a class="mobile-nav-link" data-page="study" href="#study"><span>◴</span><small>Study Timer</small></a>
+<a class="mobile-nav-link" data-page="exams" href="#exams"><span>◷</span><small>Exam Countdown</small></a>
+<a class="mobile-nav-link" data-page="challenges" href="#challenges"><span>⚡</span><small>Challenges</small></a>
+<a class="mobile-nav-link" data-page="leaderboard" href="#leaderboard"><span>♛</span><small>Ranks</small></a>
+<a class="mobile-nav-link" data-page="friends" href="#friends"><span>♧</span><small>Friends</small></a>
+<a class="mobile-nav-link" data-page="league" href="#league"><span>🏆</span><small>League</small></a>
+<a class="mobile-nav-link" data-page="todo" href="#todo"><span>☑</span><small>Tasks</small></a>
+<a class="mobile-nav-link" data-page="profile" href="#profile"><span>◉</span><small>Profile</small></a>
+<button class="mobile-nav-link mobile-logout-link" id="mobileLogoutBtn" type="button"><span>↪</span><small>Logout</small></button>
+</div></nav>
+<div class="site-modal-backdrop" id="logoutModal" hidden><section class="site-modal" role="dialog" aria-modal="true" aria-labelledby="logoutModalTitle"><div class="site-modal-icon">↪</div><h3 id="logoutModalTitle">Log out?</h3><p>Are you sure you want to log out of your account?</p><div class="site-modal-actions"><button type="button" class="site-modal-cancel" id="cancelLogoutBtn">Cancel</button><button type="button" class="site-modal-confirm" id="confirmLogoutBtn">Yes, log out</button></div></section></div>
 <script src="app.js" type="module"></script>
 </body>
 </html>

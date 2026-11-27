@@ -24,8 +24,7 @@ import {
     updateDoc,
     deleteDoc,
     addDoc,
-    orderBy,
-    onSnapshot
+    orderBy
 } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 
 
@@ -281,24 +280,67 @@ async function loadDashboard(user) {
 
 /* LOGOUT */
 async function logout() {
-    try {
-        // Keep an active timer intact so the same user can resume it after logging in again.
-        await signOut(auth);
-        dashboard.hidden = true;
-        mobileNav.hidden = true;
-        authContainer.hidden = false;
-        loginForm.reset();
-        registerForm.reset();
-        showMessage("You have been logged out.");
-        stopTimerTicker();
-    } catch (error) {
-        console.error("Logout error:", error);
-        alert("Could not log out. Please try again.");
-    }
+    const modal = document.getElementById("logoutModal");
+    const cancelBtn = document.getElementById("cancelLogoutBtn");
+    const confirmBtn = document.getElementById("confirmLogoutBtn");
+    if (!modal || !cancelBtn || !confirmBtn) return;
+    modal.hidden = false;
+    await new Promise(resolve => {
+        const cleanup = () => {
+            modal.hidden = true;
+            cancelBtn.removeEventListener("click", cancel);
+            confirmBtn.removeEventListener("click", confirm);
+            modal.removeEventListener("click", backdrop);
+            document.removeEventListener("keydown", escape);
+        };
+        const cancel = () => { cleanup(); resolve(false); };
+        const backdrop = event => { if (event.target === modal) cancel(); };
+        const escape = event => { if (event.key === "Escape") cancel(); };
+        const confirm = async () => {
+            cleanup();
+            try {
+                await signOut(auth);
+                dashboard.hidden = true;
+                mobileNav.hidden = true;
+                authContainer.hidden = false;
+                loginForm.reset();
+                registerForm.reset();
+                showMessage("You have been logged out.");
+                stopTimerTicker();
+                resolve(true);
+            } catch (error) {
+                console.error("Logout error:", error);
+                showMessage("Could not log out. Please try again.", true);
+                resolve(false);
+            }
+        };
+        cancelBtn.addEventListener("click", cancel);
+        confirmBtn.addEventListener("click", confirm);
+        modal.addEventListener("click", backdrop);
+        document.addEventListener("keydown", escape);
+    });
 }
 
 logoutBtn.addEventListener("click", logout);
 mobileLogoutBtn.addEventListener("click", logout);
+
+const mobileNavToggle = document.getElementById("mobileNavToggle");
+const mobileNavMenu = document.getElementById("mobileNavMenu");
+const mobileNavCurrent = document.getElementById("mobileNavCurrent");
+mobileNavToggle.addEventListener("click", () => {
+    const opened = mobileNavMenu.classList.toggle("is-open");
+    mobileNavToggle.setAttribute("aria-expanded", String(opened));
+    mobileNavToggle.classList.toggle("is-open", opened);
+});
+mobileNavMenu.querySelectorAll("a[data-page]").forEach(link => {
+    link.addEventListener("click", () => {
+        const label = link.querySelector("small")?.textContent || "Menu";
+        mobileNavCurrent.textContent = label;
+        mobileNavMenu.classList.remove("is-open");
+        mobileNavToggle.classList.remove("is-open");
+        mobileNavToggle.setAttribute("aria-expanded", "false");
+    });
+});
 
 
 /* PROFILE + FRIENDS */
@@ -674,8 +716,6 @@ async function openFriendProfile(person, favorite) {
         const sessionsSnap = await getDocs(query(collection(db, "studySessions"), where("uid", "==", person.uid)));
         const completed = sessionsSnap.docs.map(item => item.data()).filter(item => item.status === "completed");
         const totalSeconds = completed.reduce((sum, item) => sum + Math.max(0, Number(item.durationSeconds) || 0), 0);
-        const countdownSeconds = completed.filter(item => item.mode === "countdown").reduce((sum, item) => sum + Math.max(0, Number(item.durationSeconds) || 0), 0);
-        const stopwatchSeconds = completed.filter(item => item.mode === "stopwatch").reduce((sum, item) => sum + Math.max(0, Number(item.durationSeconds) || 0), 0);
         const dayKeys = [...new Set(completed.map(item => {
             const stamp = item.startedAt?.toDate?.() || (item.startedAt?.toMillis ? new Date(item.startedAt.toMillis()) : null);
             return stamp && !Number.isNaN(stamp.getTime()) ? `${stamp.getFullYear()}-${stamp.getMonth()}-${stamp.getDate()}` : null;
@@ -695,7 +735,7 @@ async function openFriendProfile(person, favorite) {
             bestStreak = Math.max(bestStreak, run); previous = date;
         });
         const hours = (totalSeconds / 3600).toFixed(totalSeconds >= 36000 ? 0 : 1);
-        statsBox.innerHTML = `<div class="friend-stat-card"><strong>${formatStudyTotal(totalSeconds)}</strong><span>TOTAL STUDY TIME</span></div><div class="friend-stat-card"><strong>${formatStudyTotal(countdownSeconds)}</strong><span>COUNTDOWN</span></div><div class="friend-stat-card"><strong>${formatStudyTotal(stopwatchSeconds)}</strong><span>STOPWATCH</span></div><div class="friend-stat-card"><strong>${currentStreak} 🔥</strong><span>DAY STREAK</span></div><div class="friend-stat-card"><strong>${completed.length}</strong><span>SESSIONS</span></div><div class="friend-stat-card"><strong>${bestStreak} days</strong><span>BEST STREAK</span></div>`;
+        statsBox.innerHTML = `<div class="friend-stat-card"><strong>${hours}h</strong><span>STUDY HOURS</span></div><div class="friend-stat-card"><strong>${currentStreak} 🔥</strong><span>DAY STREAK</span></div><div class="friend-stat-card"><strong>${completed.length}</strong><span>SESSIONS</span></div><div class="friend-stat-card"><strong>${bestStreak} days</strong><span>BEST STREAK</span></div>`;
     } catch (error) {
         console.error("Could not load friend study stats:", error);
         statsBox.innerHTML = '<p class="community-note">Study statistics are unavailable right now.</p>';
@@ -823,13 +863,10 @@ function formatDuration(totalSeconds) {
 }
 
 function formatStudyTotal(totalSeconds) {
-    const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
-    const hours = Math.floor(safeSeconds / 3600);
-    const minutes = Math.floor((safeSeconds % 3600) / 60);
-    const seconds = safeSeconds % 60;
-    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
-    if (minutes > 0) return `${minutes}m ${seconds}s`;
-    return `${seconds}s`;
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
 }
 
 function getElapsedMilliseconds(session, now = Date.now()) {
@@ -1173,42 +1210,6 @@ async function restoreStudySession(uid) {
 
 
 /* LOAD STUDY TOTALS FROM FIRESTORE */
-async function resetMyStudyStats() {
-    const user = auth.currentUser;
-    const status = document.getElementById("resetStudyStatsStatus");
-    const button = document.getElementById("resetStudyStatsBtn");
-    if (!user) return;
-
-    const confirmed = window.confirm(
-        "Reset all your recorded study time? This permanently deletes your completed Countdown and Stopwatch sessions and removes that time from league/challenge rankings. This cannot be undone."
-    );
-    if (!confirmed) return;
-
-    try {
-        if (button) { button.disabled = true; button.textContent = "RESETTING..."; }
-        if (status) status.textContent = "Resetting your study statistics...";
-
-        const sessionsSnapshot = await getDocs(query(
-            collection(db, "studySessions"),
-            where("uid", "==", user.uid)
-        ));
-
-        const completedSessions = sessionsSnapshot.docs.filter(item => item.data().status === "completed");
-        for (const session of completedSessions) {
-            await deleteDoc(doc(db, "studySessions", session.id));
-        }
-
-        await loadStudyStats(user.uid);
-        if (typeof loadLeagueRanking === "function" && activeLeagueId) await loadLeagueRanking();
-        if (status) status.textContent = `Study time reset successfully. ${completedSessions.length} completed sessions deleted.`;
-    } catch (error) {
-        console.error("Could not reset study statistics:", error);
-        if (status) status.textContent = `Could not reset study time (${error.code || error.message}). Check Firestore rules.`;
-    } finally {
-        if (button) { button.disabled = false; button.textContent = "↻ RESET STUDY TIME"; }
-    }
-}
-
 async function loadStudyStats(uid) {
     try {
         const sessionsQuery = query(
@@ -1218,37 +1219,21 @@ async function loadStudyStats(uid) {
         const snapshot = await getDocs(sessionsQuery);
 
         let totalSeconds = 0;
-        let countdownSeconds = 0;
-        let stopwatchSeconds = 0;
         let completedCount = 0;
 
         snapshot.forEach(sessionDoc => {
             const data = sessionDoc.data();
             if (data.status === "completed") {
-                const seconds = Math.max(0, Number(data.durationSeconds) || 0);
-                totalSeconds += seconds;
-                if (data.mode === "countdown") countdownSeconds += seconds;
-                if (data.mode === "stopwatch") stopwatchSeconds += seconds;
+                totalSeconds += Math.max(0, Number(data.durationSeconds) || 0);
                 completedCount++;
             }
         });
 
         const formatted = formatStudyTotal(totalSeconds);
-
-        // Update only elements that actually exist on the current page.
-        const totalStudyTimeEl = document.getElementById("totalStudyTime");
-        const completedSessionsEl = document.getElementById("completedSessions");
-        const profileStudyTimeEl = document.getElementById("profileStudyTime");
-        const profileSessionCountEl = document.getElementById("profileSessionCount");
-        const profileCountdownTimeEl = document.getElementById("profileCountdownTime");
-        const profileStopwatchTimeEl = document.getElementById("profileStopwatchTime");
-
-        if (totalStudyTimeEl) totalStudyTimeEl.textContent = formatted;
-        if (completedSessionsEl) completedSessionsEl.textContent = `${completedCount} completed sessions`;
-        if (profileStudyTimeEl) profileStudyTimeEl.textContent = formatted;
-        if (profileSessionCountEl) profileSessionCountEl.textContent = completedCount;
-        if (profileCountdownTimeEl) profileCountdownTimeEl.textContent = formatStudyTotal(countdownSeconds);
-        if (profileStopwatchTimeEl) profileStopwatchTimeEl.textContent = formatStudyTotal(stopwatchSeconds);
+        document.getElementById("totalStudyTime").textContent = formatted;
+        document.getElementById("completedSessions").textContent = `${completedCount} completed sessions`;
+        document.getElementById("profileStudyTime").textContent = formatted;
+        document.getElementById("profileSessionCount").textContent = completedCount;
     } catch (error) {
         console.error("Could not load study statistics:", {
             code: error.code || "unknown",
@@ -1274,7 +1259,10 @@ function getSessionStartMillis(data) {
 }
 
 function formatChallengeTime(seconds) {
-    return formatStudyTotal(seconds);
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h) return `${h}h ${m}m`;
+    return `${m}m`;
 }
 
 async function loadCommunityFeatures(uid) {
@@ -1370,11 +1358,8 @@ async function loadWeeklyLeaderboard(currentUid) {
         snapshot.forEach(item => {
             const data = item.data();
             if (data.status !== "completed" || !data.uid) return;
-            const member = members.get(data.uid) || { uid: data.uid, username: data.username || (data.uid === currentUid ? currentProfile?.username : "Community Member") || "Community Member", seconds: 0, countdownSeconds: 0, stopwatchSeconds: 0 };
-            const sessionSeconds = Math.max(0, Number(data.durationSeconds) || 0);
-            member.seconds += sessionSeconds;
-            if (data.mode === "countdown") member.countdownSeconds += sessionSeconds;
-            if (data.mode === "stopwatch") member.stopwatchSeconds += sessionSeconds;
+            const member = members.get(data.uid) || { uid: data.uid, username: data.username || (data.uid === currentUid ? currentProfile?.username : "Community Member") || "Community Member", seconds: 0 };
+            member.seconds += Math.max(0, Number(data.durationSeconds) || 0);
             if (data.username) member.username = data.username;
             members.set(data.uid, member);
         });
@@ -1400,8 +1385,7 @@ async function loadWeeklyLeaderboard(currentUid) {
             left.append(rank, name);
             const time = document.createElement("strong");
             time.className = "leaderboard-time";
-            time.textContent = `${formatChallengeTime(member.seconds)}  |  ⏳ ${formatChallengeTime(member.countdownSeconds)}  |  ⏱ ${formatChallengeTime(member.stopwatchSeconds)}`;
-            time.title = "Total study time | Countdown | Stopwatch";
+            time.textContent = formatChallengeTime(member.seconds);
             row.append(left, time);
             list.append(row);
         });
@@ -1415,7 +1399,6 @@ async function loadWeeklyLeaderboard(currentUid) {
 /* STUDY LEAGUES + SHARED TASKS + PERSONAL TODO */
 let activeLeagueId = null;
 let activeLeagueData = null;
-let leagueProfileUnsubscribers = [];
 
 function makeInviteCode() {
     const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -1436,57 +1419,12 @@ async function loadMyLeagues() {
             const league = item.data();
             const row = document.createElement("div"); row.className = "friend-list-row";
             const title = document.createElement("strong"); title.textContent = league.name || "Study League";
-            const actions = document.createElement("div");
-            actions.className = "league-list-actions";
             const button = document.createElement("button"); button.className = "mini-action"; button.textContent = "OPEN";
             button.addEventListener("click", () => openLeague(item.id, league));
-            const exitButton = document.createElement("button");
-            exitButton.className = "mini-action league-exit-btn";
-            exitButton.textContent = "EXIT";
-            exitButton.title = "Leave this league";
-            exitButton.addEventListener("click", () => leaveLeague(item.id, league));
-            actions.append(button, exitButton);
-            row.append(title, actions); list.append(row);
+            row.append(title, button); list.append(row);
         });
         if (!activeLeagueId && !snap.empty) openLeague(snap.docs[0].id, snap.docs[0].data());
     } catch (error) { console.error("League load failed:", error); list.textContent = `Could not load leagues (${error.code || error.message}). Publish the latest Firestore Rules.`; }
-}
-
-async function leaveLeague(leagueId, leagueData = {}) {
-    const user = auth.currentUser;
-    if (!user || !leagueId) return;
-    const leagueName = leagueData.name || "this league";
-    if (!confirm(`Are you sure you want to EXIT ${leagueName}? Your study history will not be deleted.`)) return;
-
-    try {
-        const leagueRef = doc(db, "leagues", leagueId);
-        const latestSnap = await getDoc(leagueRef);
-        if (!latestSnap.exists()) throw new Error("This league no longer exists.");
-        const latestLeague = latestSnap.data();
-        const currentMembers = Array.isArray(latestLeague.memberUids) ? latestLeague.memberUids : [];
-        if (!currentMembers.includes(user.uid)) {
-            await loadMyLeagues();
-            return;
-        }
-
-        await updateDoc(leagueRef, { memberUids: currentMembers.filter(uid => uid !== user.uid) });
-
-        if (activeLeagueId === leagueId) {
-            leagueProfileUnsubscribers.forEach(unsubscribe => unsubscribe());
-            leagueProfileUnsubscribers = [];
-            activeLeagueId = null;
-            activeLeagueData = null;
-            document.getElementById("activeLeagueTitle").textContent = "League details";
-            document.getElementById("activeLeagueCode").textContent = "";
-            document.getElementById("leagueTasksList").textContent = "Select a league to view its tasks.";
-            document.getElementById("leagueRankingList").textContent = "Select a league to view its ranking.";
-        }
-
-        await loadMyLeagues();
-    } catch (error) {
-        console.error("Could not leave league:", error);
-        alert(`Could not EXIT league (${error.code || error.message}). Make sure you publish the updated Firestore Rules.`);
-    }
 }
 
 async function createLeague() {
@@ -1573,92 +1511,16 @@ async function loadLeagueRanking() {
     const list = document.getElementById("leagueRankingList");
     if (!activeLeagueData || !list) return;
     list.textContent = "Calculating all-time study totals...";
-    // Stop listeners from the previously opened league before subscribing to this one.
-    leagueProfileUnsubscribers.forEach(unsubscribe => unsubscribe());
-    leagueProfileUnsubscribers = [];
     try {
         const sessionSnap = await getDocs(collection(db, "studySessions"));
-        const members = new Map((activeLeagueData.memberUids || []).map(uid => [uid, {
-            uid, username: "Member", avatarUrl: "", seconds: 0, countdownSeconds: 0, stopwatchSeconds: 0
-        }]));
-        sessionSnap.forEach(item => {
-            const d = item.data();
-            const member = members.get(d.uid);
-            if (member && d.status === "completed") {
-                const seconds = Math.max(0, Number(d.durationSeconds) || 0);
-                member.seconds += seconds;
-                if (d.mode === "countdown") member.countdownSeconds += seconds;
-                if (d.mode === "stopwatch") member.stopwatchSeconds += seconds;
-            }
-        });
-
-        // Load the latest public profile (username + avatar) before the first render.
+        const members = new Map((activeLeagueData.memberUids || []).map(uid => [uid, { uid, username: "Member", seconds: 0 }]));
+        sessionSnap.forEach(item => { const d = item.data(); const member = members.get(d.uid); if (member && d.status === "completed") { member.seconds += Number(d.durationSeconds) || 0; if (d.username) member.username = d.username; } });
         const profiles = await Promise.all([...members.keys()].map(uid => getDoc(doc(db, "publicProfiles", uid))));
-        profiles.forEach(profileSnap => {
-            if (!profileSnap.exists() || !members.has(profileSnap.id)) return;
-            const profile = profileSnap.data();
-            const member = members.get(profileSnap.id);
-            member.username = profile.username || member.username;
-            member.avatarUrl = profile.avatarUrl || "";
-        });
-
-        const renderRanking = () => {
-            const ranked = [...members.values()].sort((a, b) => b.seconds - a.seconds);
-            list.replaceChildren();
-            const currentUid = auth.currentUser?.uid;
-            ranked.forEach((member, i) => {
-                const row = document.createElement("div");
-                row.className = `friend-list-row league-ranking-row${member.uid === currentUid ? " is-current-user" : ""}`;
-                row.dataset.uid = member.uid;
-
-                const identity = document.createElement("div");
-                identity.className = "league-ranking-identity";
-                const avatar = document.createElement("div");
-                avatar.className = "league-ranking-avatar";
-                if (member.avatarUrl) {
-                    avatar.style.backgroundImage = `url("${String(member.avatarUrl).replace(/["\\]/g, "")}")`;
-                    avatar.classList.add("has-photo");
-                    avatar.setAttribute("aria-label", `${member.username} profile picture`);
-                } else {
-                    avatar.textContent = (member.username || "M").trim().charAt(0).toUpperCase();
-                }
-                const name = document.createElement("strong");
-                name.className = "league-ranking-name";
-                name.textContent = `${i + 1}. ${member.username}`;
-                identity.append(avatar, name);
-                if (currentUid && member.uid === currentUid) {
-                    const you = document.createElement("span");
-                    you.className = "league-you-badge";
-                    you.textContent = "YOU";
-                    identity.append(you);
-                }
-                const time = document.createElement("small");
-                time.textContent = `${formatChallengeTime(member.seconds)}  |  ⏳ ${formatChallengeTime(member.countdownSeconds)}  |  ⏱ ${formatChallengeTime(member.stopwatchSeconds)}`;
-                time.title = "Total study time | Countdown | Stopwatch";
-                row.append(identity, time);
-                list.append(row);
-            });
-        };
-
-        renderRanking();
-        // Keep names and profile photos synchronized live when members edit their profiles.
-        members.forEach((member, uid) => {
-            const unsubscribe = onSnapshot(doc(db, "publicProfiles", uid), snapshot => {
-                if (!snapshot.exists()) return;
-                const profile = snapshot.data();
-                const nextUsername = profile.username || "Member";
-                const nextAvatarUrl = profile.avatarUrl || "";
-                if (member.username === nextUsername && member.avatarUrl === nextAvatarUrl) return;
-                member.username = nextUsername;
-                member.avatarUrl = nextAvatarUrl;
-                renderRanking();
-            }, error => console.warn(`Could not watch profile ${uid}:`, error));
-            leagueProfileUnsubscribers.push(unsubscribe);
-        });
-    } catch (error) {
-        console.error(error);
-        list.textContent = `Could not calculate ranking (${error.code || error.message}).`;
-    }
+        profiles.forEach(p => { if (p.exists() && members.has(p.id)) members.get(p.id).username = p.data().username || members.get(p.id).username; });
+        const ranked = [...members.values()].sort((a,b) => b.seconds-a.seconds);
+        list.replaceChildren();
+        ranked.forEach((member, i) => { const row = document.createElement("div"); row.className = "friend-list-row"; const name = document.createElement("strong"); name.textContent = `${i+1}. ${member.username}${member.uid === auth.currentUser.uid ? " (YOU)" : ""}`; const time = document.createElement("small"); time.textContent = formatChallengeTime(member.seconds); row.append(name,time); list.append(row); });
+    } catch (error) { console.error(error); list.textContent = `Could not calculate ranking (${error.code || error.message}).`; }
 }
 
 async function loadTodoList() {
@@ -1703,7 +1565,6 @@ document.getElementById("createLeagueBtn")?.addEventListener("click", createLeag
 document.getElementById("joinLeagueBtn")?.addEventListener("click", joinLeague);
 document.getElementById("addLeagueTaskBtn")?.addEventListener("click", addLeagueTask);
 document.getElementById("addTodoBtn")?.addEventListener("click", addTodo);
-document.getElementById("resetStudyStatsBtn")?.addEventListener("click", resetMyStudyStats);
 
 
 countdownModeBtn.addEventListener("click", () => setTimerMode("countdown"));
