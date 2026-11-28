@@ -4075,7 +4075,7 @@ function renderStudyRoom(){
         ? "STOPWATCH" : room.mode === "until" ? "UNTIL END TIME" : "COUNTDOWN";
     document.getElementById("studyHostControls").hidden = !isHost;
     document.getElementById("studyHostStartBtn").hidden = !isHost || room.status !== "waiting";
-    document.getElementById("studyHostStopBtn").hidden = !isHost || !["active", "ending"].includes(room.status);\n    let pauseBtn = document.getElementById("studyHostPauseBtn");\n    if (!pauseBtn) { pauseBtn = document.createElement("button"); pauseBtn.id = "studyHostPauseBtn"; pauseBtn.type = "button"; pauseBtn.className = "community-action-btn fullscreen-control-btn"; document.getElementById("studyHostControls").insertBefore(pauseBtn, document.getElementById("studyHostStopBtn")); pauseBtn.addEventListener("click", toggleStudyRoomPause); }\n    pauseBtn.hidden = !isHost || !["active", "paused"].includes(room.status);\n    pauseBtn.disabled = studyRoomActionPending;\n    pauseBtn.textContent = room.status === "paused" ? "RESUME TIMER" : "PAUSE TIMER";
+    document.getElementById("studyHostStopBtn").hidden = !isHost || !["active", "paused", "ending"].includes(room.status);\n    let pauseBtn = document.getElementById("studyHostPauseBtn");\n    if (!pauseBtn) { pauseBtn = document.createElement("button"); pauseBtn.id = "studyHostPauseBtn"; pauseBtn.type = "button"; pauseBtn.className = "community-action-btn fullscreen-control-btn"; document.getElementById("studyHostControls").insertBefore(pauseBtn, document.getElementById("studyHostStopBtn")); pauseBtn.addEventListener("click", toggleStudyRoomPause); }\n    pauseBtn.hidden = !isHost || !["active", "paused"].includes(room.status);\n    pauseBtn.disabled = studyRoomActionPending;\n    pauseBtn.textContent = room.status === "paused" ? "RESUME TIMER" : "PAUSE TIMER";
     document.getElementById("studyHostStartBtn").disabled = studyRoomActionPending;
     document.getElementById("studyHostStopBtn").disabled = studyRoomActionPending;
     if (!studyRoomActionPending) {
@@ -4209,7 +4209,7 @@ if(stopStudyHostBtn)stopStudyHostBtn.addEventListener("click",()=>endStudyRoom(f
 async function endStudyRoom(auto){
     const room = activeStudyRoomData;
     if (!room || room.ownerUid !== auth.currentUser?.uid ||
-        !["active", "ending"].includes(room.status) || endingStudyRoom || studyRoomActionPending) return;
+        !["active", "paused", "ending"].includes(room.status) || endingStudyRoom || studyRoomActionPending) return;
     endingStudyRoom = true;
     stopStudyRoomTicker();
     const stopButton = document.getElementById("studyHostStopBtn");
@@ -4225,6 +4225,13 @@ async function endStudyRoom(auto){
     }
 
     const roomId = room.id;
+    if (room.status === "paused") {
+        studyRoomActionPending = true;
+        try { await manageStudyRoomCallable({ action: "end", roomId, autoEnded: auto }); }
+        catch (error) { showAppPopup(studyRoomActionError(error, "end"), { error: true }); }
+        finally { studyRoomActionPending = false; endingStudyRoom = false; if (activeStudyRoomData) renderStudyRoom(); }
+        return;
+    }
     studyRoomActionPending = true;
     if (room.status === "active") {
         activeStudyRoomData = { ...room, status: "ending", endRequestedAt: new Date(), autoEnded: auto };
