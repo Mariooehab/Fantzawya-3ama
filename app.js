@@ -3674,6 +3674,9 @@ let studyRoomUnsubscribe = null;
 let studyInviteUnsubscribe = null;
 let activeStudyRoomUnsubscribe = null;
 let activeStudyRoomRemovalUnsubscribe = null;
+let studyRoomChatUnsubscribe = null;
+let studySessionFilter = "all";
+let studyRoomChatSending = false;
 let studyRoomStatsUnsubscribe = null;
 let studySessionStatsUnsubscribe = null;
 let studyStatsRefreshTimer = null;
@@ -3757,7 +3760,42 @@ async function loadStudyFriends(uid) {
         studyFriendsCache.forEach(friend => { const option=document.createElement("option"); option.value=friend.uid; option.textContent=`${friend.username || "Friend"} (@${friend.username || "member"})`; select.append(option); });
     } catch (error) { console.error("Study friends load failed", error); select.innerHTML="<option disabled>Could not load friends</option>"; }
 }
+
+function initStudySessionFilters() {
+    const filters = document.getElementById("studySessionFilters");
+    if (!filters || filters.dataset.bound === "true") return;
+    filters.dataset.bound = "true";
+    filters.addEventListener("click", event => {
+        const button = event.target.closest("[data-study-filter]");
+        if (!button) return;
+        studySessionFilter = button.dataset.studyFilter || "all";
+        filters.querySelectorAll("[data-study-filter]").forEach(item => item.classList.toggle("active", item === button));
+        applyStudySessionFilter();
+    });
+}
+function applyStudySessionFilter() {
+    const roomRows = [...document.querySelectorAll("#myStudyRoomsList .study-room-row")];
+    const inviteRows = [...document.querySelectorAll("#studyInvitesList .study-invite-row")];
+    roomRows.forEach(row => {
+        row.hidden = studySessionFilter === "invited" ||
+            (studySessionFilter === "active" && row.dataset.studyStatus !== "active") ||
+            (studySessionFilter === "ended" && !["completed","cancelled"].includes(row.dataset.studyStatus));
+    });
+    inviteRows.forEach(row => { row.hidden = studySessionFilter !== "all" && studySessionFilter !== "invited"; });
+    const counts = {
+        all: roomRows.length + inviteRows.length,
+        active: roomRows.filter(row => row.dataset.studyStatus === "active").length,
+        ended: roomRows.filter(row => ["completed","cancelled"].includes(row.dataset.studyStatus)).length,
+        invited: inviteRows.length
+    };
+    Object.entries({all:"studyFilterAllCount",active:"studyFilterActiveCount",ended:"studyFilterEndedCount",invited:"studyFilterInvitedCount"}).forEach(([key,id]) => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = String(counts[key]);
+    });
+}
+
 async function initStudyRooms(uid) {
+    initStudySessionFilters();
     if (auth.currentUser?.uid !== uid) return;
     await loadStudyFriends(uid);
     if (auth.currentUser?.uid !== uid) return;
@@ -3796,13 +3834,16 @@ async function initStudyRooms(uid) {
             }
             const row = document.createElement("div");
             row.className = "study-room-row";
+            row.dataset.studyStatus = data.status || "waiting";
             row.tabIndex = 0;
             const info = document.createElement("span");
             info.className = "study-room-row-info";
             const name = document.createElement("strong");
             name.textContent = data.name || "Study room";
             const meta = document.createElement("small");
-            meta.textContent = `${(data.memberUids || []).length} participant(s) • ${data.status === "active" ? "Session live" : data.status === "ending" ? "Session ending" : data.status === "completed" ? "Finished" : data.status === "cancelled" ? "Cancelled" : "Waiting to start"}`;
+            const endMillis = studyRoomTimestampMillis(data.endedAt || data.targetEndAt);
+            const endsLabel = endMillis ? new Date(endMillis).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : data.mode === "stopwatch" ? "No fixed end" : "Not started";
+            meta.textContent = `${(data.memberUids || []).length} participant(s) • ${data.status === "active" ? "Session live" : data.status === "ending" ? "Session ending" : data.status === "completed" ? "Finished" : data.status === "cancelled" ? "Cancelled" : "Waiting to start"} • ENDS: ${endsLabel}`;
             info.append(name, meta);
             const status = document.createElement("span");
             status.className = `study-room-pill ${data.status || "waiting"}`;
@@ -3850,6 +3891,7 @@ async function initStudyRooms(uid) {
             row.append(actions);
             list.append(row);
         });
+        applyStudySessionFilter();
         if (!activeStudyRoomId && snap.docs.length) openStudyRoom(snap.docs[0].id);
     }, error => {
         if (auth.currentUser?.uid !== uid) return;
@@ -3871,6 +3913,7 @@ async function initStudyRooms(uid) {
             const data = item.data();
             const row = document.createElement("div");
             row.className = "study-invite-row";
+            row.dataset.studyStatus = "invited";
             const details = document.createElement("div");
             const title = document.createElement("strong");
             title.textContent = `${data.senderUsername || "A friend"} invited you`;
@@ -3891,6 +3934,7 @@ async function initStudyRooms(uid) {
             row.append(details, actions);
             list.append(row);
         });
+        applyStudySessionFilter();
     }, error => {
         if (auth.currentUser?.uid !== uid) return;
         console.error("Study invitation listener failed:", error);
@@ -3935,7 +3979,7 @@ async function respondStudyInvite(inviteId,roomId,accept){
                 const room = roomSnapshot.data();
                 const invite = inviteSnapshot.data();
                 if (!uid || invite.roomId !== roomId || invite.recipientUid !== uid || invite.status !== "pending" ||
-                    room.status !== "waiting" || (room.kickedUids || []).includes(uid) || (room.memberUids || []).includes(uid)) {
+                    !["waiting", "active"].includes(room.status) || (room.kickedUids || []).includes(uid) || (room.memberUids || []).includes(uid)) {
                     throw new Error("This invitation is no longer available.");
                 }
                 transaction.update(roomRef, { memberUids: [...room.memberUids, uid] });
@@ -3959,6 +4003,8 @@ async function openStudyRoom(roomId){
     activeStudyRoomProfiles = new Map();
     studyRoomProfileLoads = new Set();
     activeStudyRoomNotice = "";
+    if (studyRoomChatUnsubscribe) studyRoomChatUnsubscribe();
+    studyRoomChatUnsubscribe = null;
     const panel = document.getElementById("studyRoomLivePanel");
     panel.hidden = false;
     document.getElementById("studyLiveRoomTitle").textContent = "Loading room...";
@@ -3999,6 +4045,17 @@ async function openStudyRoom(roomId){
     });
 
     if (uid) {
+        studyRoomChatUnsubscribe = onSnapshot(query(
+            collection(db, "studyRooms", roomId, "messages"),
+            orderBy("createdAt", "asc")
+        ), snapshot => {
+            if (activeStudyRoomId !== roomId || auth.currentUser?.uid !== uid) return;
+            renderStudyRoomChat(snapshot.docs);
+        }, error => {
+            console.error("Study Session chat sync failed:", error);
+            const messages = document.getElementById("studyChatMessages");
+            if (messages) messages.textContent = "Chat could not be loaded. Check your connection and Firestore Rules.";
+        });
         activeStudyRoomRemovalUnsubscribe = onSnapshot(query(
             collection(db, "studyRoomRemovals"),
             where("roomId", "==", roomId),
@@ -4060,6 +4117,13 @@ function renderStudyRoom(){
         ? "LIVE" : room.status === "ending" ? "ENDING" : room.status === "completed" ? "COMPLETED" : room.status === "cancelled" ? "CANCELLED" : "WAITING";
     document.getElementById("studyLiveModeLabel").textContent = room.mode === "stopwatch"
         ? "STOPWATCH" : room.mode === "until" ? "UNTIL END TIME" : "COUNTDOWN";
+    const invitePanel = document.getElementById("studyRoomInviteMore");
+    if (invitePanel) invitePanel.hidden = !isHost || !["waiting", "active"].includes(room.status);
+    const addFriendsSelect = document.getElementById("studyRoomAddFriends");
+    if (addFriendsSelect) {
+        const already = new Set(members);
+        [...addFriendsSelect.options].forEach(option => { option.disabled = already.has(option.value); });
+    }
     document.getElementById("studyHostControls").hidden = !isHost;
     document.getElementById("studyHostStartBtn").hidden = !isHost || room.status !== "waiting";
     document.getElementById("studyHostStopBtn").hidden = !isHost || !["active", "ending"].includes(room.status);
@@ -4109,6 +4173,94 @@ function renderStudyRoom(){
     });
     syncStudyRoomTicker();
 }
+
+function renderStudyRoomChat(docs) {
+    const container = document.getElementById("studyChatMessages");
+    if (!container) return;
+    container.replaceChildren();
+    if (!docs.length) {
+        const empty = document.createElement("p");
+        empty.className = "study-chat-empty";
+        empty.textContent = "Say hello and start planning your study session.";
+        container.append(empty);
+        return;
+    }
+    docs.forEach(snapshot => {
+        const data = snapshot.data();
+        const bubble = document.createElement("article");
+        bubble.className = "study-chat-message" + (data.senderUid === auth.currentUser?.uid ? " mine" : "");
+        const sender = document.createElement("strong");
+        sender.textContent = data.senderUid === auth.currentUser?.uid ? "You" : (data.senderUsername || "Member");
+        const body = document.createElement("p");
+        body.textContent = data.text || "";
+        const time = document.createElement("time");
+        const millis = studyRoomTimestampMillis(data.createdAt);
+        time.textContent = millis ? new Date(millis).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Sending…";
+        bubble.append(sender, body, time);
+        container.append(bubble);
+    });
+    container.scrollTop = container.scrollHeight;
+}
+const studyChatForm = document.getElementById("studyChatForm");
+if (studyChatForm) studyChatForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    const room = activeStudyRoomData;
+    const user = auth.currentUser;
+    const input = document.getElementById("studyChatInput");
+    const button = document.getElementById("studyChatSendBtn");
+    const textValue = input?.value.trim();
+    if (!room || !user || !textValue || !(room.memberUids || []).includes(user.uid) || studyRoomChatSending) return;
+    studyRoomChatSending = true;
+    button.disabled = true;
+    try {
+        await addDoc(collection(db, "studyRooms", room.id, "messages"), {
+            senderUid: user.uid,
+            senderUsername: currentProfile?.username || user.displayName || "Member",
+            text: textValue.slice(0, 1000),
+            createdAt: serverTimestamp()
+        });
+        input.value = "";
+        input.focus();
+    } catch (error) {
+        console.error("Could not send Study Session chat message:", error);
+        showAppPopup("Could not send your message. Check your connection and try again.", { error: true });
+    } finally {
+        studyRoomChatSending = false;
+        button.disabled = false;
+    }
+});
+const addRoomFriendsBtn = document.getElementById("studyRoomAddFriendsBtn");
+if (addRoomFriendsBtn) addRoomFriendsBtn.addEventListener("click", async () => {
+    const room = activeStudyRoomData;
+    const user = auth.currentUser;
+    const select = document.getElementById("studyRoomAddFriends");
+    const status = document.getElementById("studyRoomAddFriendsStatus");
+    if (!room || !user || room.ownerUid !== user.uid || !["waiting", "active"].includes(room.status)) return;
+    const selected = [...(select?.selectedOptions || [])].map(option => option.value).filter(Boolean)
+        .filter(friendUid => !(room.memberUids || []).includes(friendUid));
+    if (!selected.length) { status.textContent = "Choose at least one friend who is not already in this session."; return; }
+    addRoomFriendsBtn.disabled = true;
+    status.textContent = "Sending invitations...";
+    try {
+        const existing = await Promise.all(selected.map(friendUid => getDoc(doc(db, "studyRoomInvites", `${room.id}_${friendUid}`))));
+        const writes = selected.filter((friendUid, index) => !existing[index].exists()).map(friendUid => {
+            return setDoc(doc(db, "studyRoomInvites", `${room.id}_${friendUid}`), {
+                roomId: room.id, roomName: room.name || "Study Session", mode: room.mode || "stopwatch",
+                senderUid: user.uid, senderUsername: currentProfile?.username || "Member",
+                recipientUid: friendUid, status: "pending", createdAt: serverTimestamp()
+            });
+        });
+        await Promise.all(writes);
+        status.textContent = writes.length ? `${writes.length} invitation(s) sent to this session.` : "These friends already have an invitation for this session.";
+        select.selectedIndex = -1;
+    } catch (error) {
+        console.error("Could not invite more Study Session participants:", error);
+        status.textContent = `Could not send invitations (${error.code || "error"}).`;
+    } finally {
+        addRoomFriendsBtn.disabled = false;
+    }
+});
+
 function tickStudyRoom(){
     const room = activeStudyRoomData;
     if (!room) { stopStudyRoomTicker(); return; }
@@ -4263,6 +4415,8 @@ async function endStudyRoom(auto){
 
 
 function closeActiveStudyRoom(){
+    if (studyRoomChatUnsubscribe) studyRoomChatUnsubscribe();
+    studyRoomChatUnsubscribe = null;
     if (activeStudyRoomUnsubscribe) activeStudyRoomUnsubscribe();
     if (activeStudyRoomRemovalUnsubscribe) activeStudyRoomRemovalUnsubscribe();
     activeStudyRoomUnsubscribe = null;
@@ -5109,6 +5263,7 @@ function stopAuthenticatedSubscriptions() {
         studyInviteUnsubscribe,
         activeStudyRoomUnsubscribe,
         activeStudyRoomRemovalUnsubscribe,
+        studyRoomChatUnsubscribe,
         studyRoomStatsUnsubscribe,
         studySessionStatsUnsubscribe
     ].forEach(unsubscribe => unsubscribe?.());
@@ -5116,6 +5271,7 @@ function stopAuthenticatedSubscriptions() {
     studyInviteUnsubscribe = null;
     activeStudyRoomUnsubscribe = null;
     activeStudyRoomRemovalUnsubscribe = null;
+    studyRoomChatUnsubscribe = null;
     studyRoomStatsUnsubscribe = null;
     studySessionStatsUnsubscribe = null;
     stopStudyLeaderboardUpdates();
