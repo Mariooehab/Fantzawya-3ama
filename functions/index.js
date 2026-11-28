@@ -148,7 +148,7 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
         if (!Number.isInteger(durationSeconds) || durationSeconds < 60 || durationSeconds > 86400) {
           throw new HttpsError('failed-precondition', 'The countdown duration is invalid.');
         }
-        targetEndAt = new Date(nowMillis + durationSeconds * 1000).toISOString();
+        targetEndAt = Timestamp.fromMillis(nowMillis + durationSeconds * 1000);
       } else if (room.mode === 'until') {
         const endMillis = timestampMillis(room.targetEndAt);
         if (!endMillis || endMillis <= nowMillis) {
