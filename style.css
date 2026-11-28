@@ -2448,3 +2448,6 @@ body.fai-open:before{content:"";position:fixed;inset:0;background:rgba(5,5,15,.6
 .study-private-chat .study-chat-compose{margin-top:9px;border-radius:12px}
 @media(max-width:760px){.study-session-topbar{top:62px}.study-session-topbar .study-session-filter{padding:0 12px}.study-room-layout{grid-template-columns:1fr}.study-room-participants{grid-template-columns:1fr}.study-room-create{padding:20px!important}}
 @media(max-width:480px){.study-session-topbar{gap:5px;padding:6px}.study-session-topbar .study-session-filter{min-height:36px;padding:0 10px;font-size:9px}.study-session-topbar .study-session-new{margin-left:0}.study-room-create h4{font-size:19px}}
+
+.study-room-layout:has(.study-room-create[hidden]){grid-template-columns:minmax(0,1fr)}
+.study-room-layout:has(.study-room-create[hidden]) .study-room-inbox{grid-column:1/-1}
