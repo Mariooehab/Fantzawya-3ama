@@ -2364,3 +2364,37 @@ body.fai-open:before{content:"";position:fixed;inset:0;background:rgba(5,5,15,.6
     .prayer-schedule-details strong { min-width:70px; }
 }
 
+
+/* Study Session filters, member invites and WhatsApp-style group chat */
+.study-session-filters{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 5px;padding:7px;border:1px solid rgba(167,139,250,.14);border-radius:14px;background:rgba(8,10,25,.55)}
+.study-session-filter{display:flex;align-items:center;gap:7px;min-height:35px;padding:0 13px;border:1px solid transparent;border-radius:10px;background:transparent;color:#aaa5c3;font:inherit;font-size:10px;font-weight:900;letter-spacing:.6px;cursor:pointer}
+.study-session-filter span{display:grid;place-items:center;min-width:19px;height:19px;padding:0 5px;border-radius:20px;background:rgba(255,255,255,.08);font-size:9px}
+.study-session-filter.active{border-color:rgba(167,139,250,.35);background:rgba(139,92,246,.16);color:#e7dcff}
+.study-room-row[hidden],.study-invite-row[hidden]{display:none!important}
+.study-room-row{flex-wrap:wrap}.study-room-row-info{flex:1;min-width:150px}.study-room-row-info small{line-height:1.6}
+.study-room-list-actions{display:flex;gap:6px;align-items:center}
+.study-room-invite-more,.study-room-chat{margin-top:20px;padding:18px;border:1px solid rgba(167,139,250,.16);border-radius:16px;background:rgba(9,11,26,.55)}
+.study-chat-section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px}
+.study-chat-section-heading h4{margin-top:4px;font-size:15px}
+.study-chat-lock-note{padding:6px 9px;border-radius:20px;background:rgba(167,139,250,.12);color:#c6b3ff;font-size:9px;font-weight:900;letter-spacing:.7px}
+.study-add-members-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:stretch}
+.study-add-members-row select{min-width:0;min-height:88px;padding:8px;border:1px solid rgba(173,153,229,.2);border-radius:11px;background:#101124;color:#f5f2ff}
+.study-add-members-row option{padding:5px}.study-add-members-row .community-action-btn{align-self:stretch;max-width:160px}
+.study-room-chat{overflow:hidden;padding:0;background:#101b20;border-color:rgba(122,170,155,.18)}
+.study-room-chat>.study-chat-section-heading{margin:0;padding:16px 18px;background:#202c33;border-bottom:1px solid rgba(255,255,255,.06)}
+.study-room-chat .section-kicker{color:#8bc7ad}.study-room-chat h4{color:#e9f2ee}
+.study-chat-online{display:flex;align-items:center;gap:7px;color:#9bb9ac;font-size:9px;font-weight:800;letter-spacing:.7px}
+.study-chat-online i{width:7px;height:7px;border-radius:50%;background:#45d69a;box-shadow:0 0 9px #45d69a}
+.study-chat-messages{display:flex;flex-direction:column;gap:9px;min-height:180px;max-height:360px;overflow-y:auto;padding:16px;background-color:#0b1419;background-image:radial-gradient(rgba(255,255,255,.035) .7px,transparent .7px);background-size:13px 13px}
+.study-chat-empty{margin:auto;color:#8c9b9d;font-size:11px;text-align:center}
+.study-chat-message{display:flex;flex-direction:column;align-self:flex-start;max-width:min(82%,520px);padding:9px 12px;border:1px solid rgba(255,255,255,.045);border-radius:4px 13px 13px 13px;background:#202c33;color:#e8efed;box-shadow:0 2px 5px rgba(0,0,0,.12);overflow-wrap:anywhere}
+.study-chat-message.mine{align-self:flex-end;border-radius:13px 4px 13px 13px;background:#164f45}
+.study-chat-message strong{margin-bottom:4px;color:#8bd4ba;font-size:10px}
+.study-chat-message p{margin:0;font-size:12px;line-height:1.55;white-space:pre-wrap}
+.study-chat-message time{align-self:flex-end;margin-top:5px;color:#a9bab4;font-size:8px}
+.study-chat-compose{display:flex;gap:9px;padding:12px;background:#202c33;border-top:1px solid rgba(255,255,255,.05)}
+.study-chat-compose input{flex:1;min-width:0;height:42px;padding:0 14px;border:1px solid rgba(255,255,255,.08);border-radius:22px;background:#111b20;color:#f4f7f6;outline:none}
+.study-chat-compose input:focus{border-color:rgba(91,190,155,.6)}
+.study-chat-compose button{display:grid;place-items:center;width:42px;height:42px;flex-shrink:0;border:0;border-radius:50%;background:#2d8b70;color:#fff;cursor:pointer}
+.study-chat-compose button:disabled{opacity:.5;cursor:not-allowed}
+@media(max-width:600px){.study-session-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.study-session-filter{justify-content:center}.study-add-members-row{grid-template-columns:1fr}.study-add-members-row .community-action-btn{max-width:none;min-height:42px}.study-chat-messages{max-height:300px}.study-chat-message{max-width:90%}}
