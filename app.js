@@ -33,6 +33,7 @@ import {
 
 const functions = getFunctions(undefined, "us-central1");
 const joinLeagueCallable = httpsCallable(functions, "joinLeague");
+const manageStudyRoomCallable = httpsCallable(functions, "manageStudyRoom");
 
 import {
     doc,
