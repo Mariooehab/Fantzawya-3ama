@@ -4199,7 +4199,7 @@ function renderStudyRoom(){
         const identity = document.createElement("span"); identity.className = "study-participant-identity";
         const label = document.createElement("strong"); label.textContent = name + (memberUid === room.ownerUid ? " · HOST" : memberUid === uid ? " · YOU" : "");
         const state = document.createElement("small"); const isReady = readyUids.includes(memberUid);
-        state.className = isReady ? "ready" : "not-ready"; state.textContent = room.status === "waiting" ? (isReady ? "READY" : "NOT READY") : (isReady ? "READY" : "IN SESSION");
+        state.className = room.status === "waiting" ? (isReady ? "ready" : "not-ready") : (room.pausedAt ? "not-ready" : "ready"); state.textContent = room.status === "waiting" ? (isReady ? "READY" : "NOT READY") : (room.pausedAt ? "PAUSED" : "IN SESSION");
         identity.append(label, state); open.append(avatar, identity); open.addEventListener("click", () => openStudyMemberProfile(memberUid)); card.append(open);
         if (isHost && memberUid !== uid && ["waiting", "active"].includes(room.status)) {
             const kickButton = document.createElement("button"); kickButton.type = "button"; kickButton.className = "mini-action danger-action";
@@ -4222,7 +4222,7 @@ function openStudyMemberProfile(memberUid) {
     document.getElementById("studyMemberModalUsername").textContent=profile.username?"@"+profile.username:(memberUid===auth.currentUser?.uid?"Your profile":"Study member");
     const ready=(room.readyUids||[]).includes(memberUid),state=document.getElementById("studyMemberModalStatus");
     state.textContent=room.status==="waiting"?(ready?"READY":"NOT READY"):(room.pausedAt?"SESSION PAUSED":"IN SESSION");
-    state.className="study-member-modal-status "+(ready?"ready":"not-ready");
+    state.className="study-member-modal-status "+(room.status==="waiting"?(ready?"ready":"not-ready"):(room.pausedAt?"not-ready":"ready"));
     const messageButton=document.getElementById("studyMemberMessageBtn");messageButton.hidden=memberUid===auth.currentUser?.uid||!["waiting","active"].includes(room.status);
     messageButton.onclick=()=>{modal.hidden=true;openStudyPrivateChat(memberUid,name);};document.getElementById("studyPrivateChatPanel").hidden=true;modal.hidden=false;
 }
