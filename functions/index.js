@@ -75,7 +75,7 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in to manage this Study Session.');
 
   const { action, roomId, targetUid, inviteId } = request.data || {};
-  if (!['start', 'end', 'join', 'leave', 'kick'].includes(action) ||
+  if (!['start', 'end', 'pause', 'resume', 'invite', 'join', 'leave', 'kick'].includes(action) ||
       typeof roomId !== 'string' || !roomId || roomId.length > 150 || roomId.includes('/')) {
     throw new HttpsError('invalid-argument', 'The Study Session action is invalid.');
   }
@@ -102,8 +102,8 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
           inviteSnapshot.data().recipientUid !== uid || inviteSnapshot.data().status !== 'pending') {
         throw new HttpsError('permission-denied', 'This invitation is no longer available.');
       }
-      if (room.status !== 'waiting') {
-        throw new HttpsError('failed-precondition', 'You can only join before the host starts the session.');
+      if (!['waiting', 'active', 'paused'].includes(room.status)) {
+        throw new HttpsError('failed-precondition', 'This Study Session is no longer accepting participants.');
       }
       if (kickedUids.includes(uid)) {
         throw new HttpsError('permission-denied', 'The host removed you from this session.');
@@ -113,6 +113,46 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
       transaction.update(roomRef, { memberUids: [...members, uid] });
       transaction.update(inviteRef, { status: 'accepted', respondedAt: now });
       return { status: 'waiting' };
+    }
+
+    if (action === 'invite') {
+      if (room.ownerUid !== uid) throw new HttpsError('permission-denied', 'Only the host can invite participants.');
+      if (!['waiting', 'active', 'paused'].includes(room.status)) throw new HttpsError('failed-precondition', 'This session is no longer open.');
+      if (typeof targetUid !== 'string' || !targetUid || targetUid.length > 128 || targetUid.includes('/') || targetUid === uid) {
+        throw new HttpsError('invalid-argument', 'Choose a valid friend to invite.');
+      }
+      if (members.includes(targetUid) || kickedUids.includes(targetUid)) throw new HttpsError('already-exists', 'This person is already in the session or was removed.');
+      const inviteRef = adminDb.collection('studyRoomInvites').doc(`${roomId}_${targetUid}`);
+      const inviteSnapshot = await transaction.get(inviteRef);
+      if (inviteSnapshot.exists && inviteSnapshot.data().status === 'pending') {
+        throw new HttpsError('already-exists', 'An invitation is already pending for this person.');
+      }
+      transaction.set(inviteRef, {
+        roomId, roomName: room.name || 'Study Session', mode: room.mode,
+        senderUid: uid, senderUsername: room.ownerUsername || 'Host',
+        recipientUid: targetUid, status: 'pending', createdAt: now
+      });
+      return { status: 'invited' };
+    }
+
+    if (action === 'pause') {
+      if (room.ownerUid !== uid) throw new HttpsError('permission-denied', 'Only the host can pause the timer.');
+      if (room.status !== 'active') throw new HttpsError('failed-precondition', 'This session is not running.');
+      transaction.update(roomRef, { status: 'paused', pausedAt: now });
+      return { status: 'paused' };
+    }
+
+    if (action === 'resume') {
+      if (room.ownerUid !== uid) throw new HttpsError('permission-denied', 'Only the host can resume the timer.');
+      if (room.status !== 'paused' || !timestampMillis(room.pausedAt)) throw new HttpsError('failed-precondition', 'This session is not paused.');
+      const pauseDuration = Math.max(0, nowMillis - timestampMillis(room.pausedAt));
+      const updates = { status: 'active', startedAt: Timestamp.fromMillis(timestampMillis(room.startedAt) + pauseDuration), pausedAt: null };
+      if (room.mode === 'countdown' || room.mode === 'until') {
+        const target = timestampMillis(room.targetEndAt);
+        if (target) updates.targetEndAt = Timestamp.fromMillis(target + pauseDuration);
+      }
+      transaction.update(roomRef, updates);
+      return { status: 'active' };
     }
 
     if (action === 'start') {
