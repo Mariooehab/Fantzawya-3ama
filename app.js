@@ -3927,24 +3927,7 @@ async function createStudyRoom(){
 async function respondStudyInvite(inviteId,roomId,accept){
     try {
         if (accept) {
-            await runTransaction(db, async transaction => {
-                const roomRef = doc(db, "studyRooms", roomId);
-                const inviteRef = doc(db, "studyRoomInvites", inviteId);
-                const [roomSnapshot, inviteSnapshot] = await Promise.all([
-                    transaction.get(roomRef),
-                    transaction.get(inviteRef)
-                ]);
-                const uid = auth.currentUser?.uid;
-                if (!roomSnapshot.exists() || !inviteSnapshot.exists()) throw new Error("This invitation is no longer available.");
-                const room = roomSnapshot.data();
-                const invite = inviteSnapshot.data();
-                if (!uid || invite.roomId !== roomId || invite.recipientUid !== uid || invite.status !== "pending" ||
-                    room.status !== "waiting" || (room.kickedUids || []).includes(uid) || (room.memberUids || []).includes(uid)) {
-                    throw new Error("This invitation is no longer available.");
-                }
-                transaction.update(roomRef, { memberUids: [...room.memberUids, uid] });
-                transaction.update(inviteRef, { status: "accepted", respondedAt: serverTimestamp() });
-            });
+            await manageStudyRoomCallable({ action: "join", roomId, inviteId });
             await openStudyRoom(roomId);
         } else {
             await updateDoc(doc(db, "studyRoomInvites", inviteId), { status: "declined", respondedAt: serverTimestamp() });
@@ -3996,7 +3979,19 @@ async function openStudyRoom(roomId){
     }, error => {
         console.error("Study Session sync failed:", error);
         if (activeStudyRoomId === roomId) {
-            const notice = document.getElementById("studyLiveNotice");
+            let inviteButton = document.getElementById("studyInviteMoreBtn");
+    if (!inviteButton) {
+        inviteButton = document.createElement("button");
+        inviteButton.id = "studyInviteMoreBtn";
+        inviteButton.type = "button";
+        inviteButton.className = "community-action-btn";
+        inviteButton.textContent = "＋ INVITE FRIEND";
+        inviteButton.addEventListener("click", inviteFriendToOpenStudyRoom);
+        document.querySelector(".study-room-extra-actions").prepend(inviteButton);
+    }
+    inviteButton.hidden = !isHost || !["waiting", "active", "paused"].includes(room.status);
+    inviteButton.disabled = studyRoomActionPending;
+    const notice = document.getElementById("studyLiveNotice");
             notice.textContent = "Could not sync this room. Check your connection and Firestore Rules.";
             notice.classList.add("error");
         }
