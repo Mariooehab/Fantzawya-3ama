@@ -142,7 +142,7 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
       if (!members.length || !members.every(memberUid => readyUids.includes(memberUid))) {
         throw new HttpsError('failed-precondition', 'Everyone must be READY before the host starts the session.');
       }
-      let targetEndAt = '';
+      let targetEndAt = room.targetEndAt || null;
       if (room.mode === 'countdown') {
         const durationSeconds = Number(room.durationSeconds);
         if (!Number.isInteger(durationSeconds) || durationSeconds < 60 || durationSeconds > 86400) {
