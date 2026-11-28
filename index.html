@@ -267,7 +267,13 @@
  </article>
  <article class="panel study-room-inbox"><div class="panel-heading"><div><span class="section-kicker">YOUR INBOX</span><h4>Study invitations</h4></div><span class="study-inbox-count" id="studyInviteCount">0</span></div><div id="studyInvitesList" class="friends-list"><p class="community-loading">Loading invitations...</p></div></article>
 </div>
-<article class="panel study-active-panel"><div class="panel-heading"><div><span class="section-kicker">LIVE COLLABORATION</span><h4>My study rooms</h4></div><span class="study-live-indicator"><i></i> LIVE SYNC</span></div><div id="myStudyRoomsList" class="study-rooms-list"><p class="community-loading">Loading your study rooms...</p></div></article>
+<article class="panel study-active-panel"><div class="panel-heading"><div><span class="section-kicker">LIVE COLLABORATION</span><h4>My study rooms</h4></div><span class="study-live-indicator"><i></i> LIVE SYNC</span></div><div class="study-session-filters" id="studySessionFilters" role="tablist" aria-label="Filter study sessions">
+ <button type="button" class="study-session-filter active" data-study-filter="all">ALL <span id="studyFilterAllCount">0</span></button>
+ <button type="button" class="study-session-filter" data-study-filter="active">ACTIVE <span id="studyFilterActiveCount">0</span></button>
+ <button type="button" class="study-session-filter" data-study-filter="ended">ENDS <span id="studyFilterEndedCount">0</span></button>
+ <button type="button" class="study-session-filter" data-study-filter="invited">INVITED <span id="studyFilterInvitedCount">0</span></button>
+</div>
+<div id="myStudyRoomsList" class="study-rooms-list"><p class="community-loading">Loading your study rooms...</p></div></article>
 
 
 
@@ -352,10 +358,25 @@
     </div>
 
     <!-- PARTICIPANTS -->
-    <div
-        class="study-room-participants"
-        id="studyLiveParticipants">
-    </div>
+    <div class="study-room-participants" id="studyLiveParticipants"></div>
+
+    <section class="study-room-invite-more" id="studyRoomInviteMore">
+        <div class="study-chat-section-heading"><div><span class="section-kicker">GROW YOUR STUDY GROUP</span><h4>Invite more friends</h4></div><span class="study-chat-lock-note">HOST ONLY</span></div>
+        <div class="study-add-members-row">
+            <select id="studyRoomAddFriends" multiple size="3" aria-label="Choose more friends to invite"><option disabled>Loading friends...</option></select>
+            <button type="button" class="community-action-btn" id="studyRoomAddFriendsBtn">SEND INVITES</button>
+        </div>
+        <p class="community-note" id="studyRoomAddFriendsStatus" aria-live="polite"></p>
+    </section>
+
+    <section class="study-room-chat" id="studyRoomChat">
+        <div class="study-chat-section-heading"><div><span class="section-kicker">STAY CONNECTED</span><h4>Group chat</h4></div><span class="study-chat-online"><i></i> SESSION CHAT</span></div>
+        <div class="study-chat-messages" id="studyChatMessages" aria-live="polite"><p class="study-chat-empty">Messages will appear here.</p></div>
+        <form class="study-chat-compose" id="studyChatForm">
+            <input id="studyChatInput" type="text" maxlength="1000" autocomplete="off" placeholder="Write a message..." aria-label="Write a group message" required>
+            <button type="submit" id="studyChatSendBtn" aria-label="Send message"><i class="fas fa-paper-plane"></i></button>
+        </form>
+    </section>
 
 </article>
 
