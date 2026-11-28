@@ -3981,7 +3981,7 @@ async function createStudyRoom(){
     btn.disabled=true; status.textContent="Creating your room...";
     try{
         const roomRef=doc(collection(db,"studyRooms"));
-        const room={name,ownerUid:user.uid,ownerUsername:currentProfile?.username||"Member",memberUids:[user.uid],mode,durationSeconds,targetEndAt,status:"waiting",createdAt:serverTimestamp(),startedAt:null,endedAt:null};
+        const room={name,ownerUid:user.uid,ownerUsername:currentProfile?.username||"Member",memberUids:[user.uid],readyUids:[],pausedAt:null,pausedSeconds:0,mode,durationSeconds,targetEndAt,status:"waiting",createdAt:serverTimestamp(),startedAt:null,endedAt:null};
         await setDoc(roomRef,room);
         const inviteWrites=selected.map(friendUid=>{const friend=studyFriendsCache.find(f=>f.uid===friendUid);return setDoc(doc(db,"studyRoomInvites",`${roomRef.id}_${friendUid}`),{roomId:roomRef.id,roomName:name,mode,senderUid:user.uid,senderUsername:currentProfile?.username||"Member",recipientUid:friendUid,status:"pending",createdAt:serverTimestamp()});});
         await Promise.all(inviteWrites);
