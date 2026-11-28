@@ -4061,7 +4061,7 @@ function renderStudyRoom(){
         ? "STOPWATCH" : room.mode === "until" ? "UNTIL END TIME" : "COUNTDOWN";
     document.getElementById("studyHostControls").hidden = !isHost;
     document.getElementById("studyHostStartBtn").hidden = !isHost || room.status !== "waiting";
-    document.getElementById("studyHostStopBtn").hidden = !isHost || !["active", "ending"].includes(room.status);
+    document.getElementById("studyHostStopBtn").hidden = !isHost || !["active", "ending"].includes(room.status);\n    let pauseBtn = document.getElementById("studyHostPauseBtn");\n    if (!pauseBtn) { pauseBtn = document.createElement("button"); pauseBtn.id = "studyHostPauseBtn"; pauseBtn.type = "button"; pauseBtn.className = "community-action-btn fullscreen-control-btn"; document.getElementById("studyHostControls").insertBefore(pauseBtn, document.getElementById("studyHostStopBtn")); pauseBtn.addEventListener("click", toggleStudyRoomPause); }\n    pauseBtn.hidden = !isHost || !["active", "paused"].includes(room.status);\n    pauseBtn.disabled = studyRoomActionPending;\n    pauseBtn.textContent = room.status === "paused" ? "RESUME TIMER" : "PAUSE TIMER";
     document.getElementById("studyHostStartBtn").disabled = studyRoomActionPending;
     document.getElementById("studyHostStopBtn").disabled = studyRoomActionPending;
     if (!studyRoomActionPending) {
@@ -4094,7 +4094,7 @@ function renderStudyRoom(){
             : memberUid === uid ? currentProfile?.username || "You" : profile.username || `Member ${memberUid.slice(0, 6)}`;
         chip.textContent = `${name}${memberUid === room.ownerUid ? " · HOST" : memberUid === uid ? " · YOU" : ""}`;
         row.append(chip);
-        if (isHost && memberUid !== uid && ["waiting", "active"].includes(room.status)) {
+        if (isHost && memberUid !== uid && ["waiting", "active", "paused"].includes(room.status)) {
             const kickButton = document.createElement("button");
             kickButton.type = "button";
             kickButton.className = "mini-action danger-action";
@@ -4141,6 +4141,27 @@ function tickStudyRoom(){
     subtext.textContent = room.mode === "stopwatch" ? "Elapsed study time" :
         `Time remaining${room.targetEndAt ? ` • ends ${new Date(studyRoomTimestampMillis(room.targetEndAt)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}`;
     if (room.mode !== "stopwatch" && value <= 0 && room.ownerUid === auth.currentUser?.uid) endStudyRoom(true);
+}
+async function toggleStudyRoomPause() {
+    const room = activeStudyRoomData;
+    if (!room || room.ownerUid !== auth.currentUser?.uid || !["active", "paused"].includes(room.status) || studyRoomActionPending) return;
+    const action = room.status === "active" ? "pause" : "resume";
+    studyRoomActionPending = true; renderStudyRoom();
+    try { await manageStudyRoomCallable({ action, roomId: room.id }); }
+    catch (error) { showAppPopup(studyRoomActionError(error, action), { error: true }); }
+    finally { studyRoomActionPending = false; if (activeStudyRoomData) renderStudyRoom(); }
+}
+async function inviteFriendToOpenStudyRoom() {
+    const room = activeStudyRoomData;
+    if (!room || room.ownerUid !== auth.currentUser?.uid || !["waiting", "active", "paused"].includes(room.status)) return;
+    if (!studyFriendsCache.length) await loadStudyFriends(auth.currentUser.uid);
+    const available = studyFriendsCache.filter(friend => !(room.memberUids || []).includes(friend.uid) && !(room.kickedUids || []).includes(friend.uid));
+    if (!available.length) { showAppPopup("No available friends to invite."); return; }
+    const choice = prompt("Enter the exact username of the friend to invite:\n" + available.map(friend => friend.username).join("\n"));
+    const friend = available.find(item => item.username === choice);
+    if (!friend) { if (choice) showAppPopup("Username not found in your friends list.", { error: true }); return; }
+    try { await manageStudyRoomCallable({ action: "invite", roomId: room.id, targetUid: friend.uid }); showAppPopup("Invitation sent."); }
+    catch (error) { showAppPopup(studyRoomActionError(error, "invite"), { error: true }); }
 }
 const startStudyHostBtn=document.getElementById("studyHostStartBtn");
 if(startStudyHostBtn)startStudyHostBtn.addEventListener("click",async()=>{
