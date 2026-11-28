@@ -3755,9 +3755,23 @@ async function loadStudyFriends(uid) {
         const ids = [...new Set([...a.docs, ...b.docs].map(d => d.data().senderUid === uid ? d.data().recipientUid : d.data().senderUid))];
         const profiles = await Promise.all(ids.map(id => getDoc(doc(db, "publicProfiles", id))));
         studyFriendsCache = profiles.filter(x => x.exists()).map(x => ({ uid: x.id, ...x.data() }));
-        select.replaceChildren();
-        if (!studyFriendsCache.length) { const option=document.createElement("option"); option.disabled=true; option.textContent="Add friends first to invite them"; select.append(option); return; }
-        studyFriendsCache.forEach(friend => { const option=document.createElement("option"); option.value=friend.uid; option.textContent=`${friend.username || "Friend"} (@${friend.username || "member"})`; select.append(option); });
+        const addSelect = document.getElementById("studyRoomAddFriends");
+        [select, addSelect].filter(Boolean).forEach(target => target.replaceChildren());
+        if (!studyFriendsCache.length) {
+            [select, addSelect].filter(Boolean).forEach(target => {
+                const option=document.createElement("option"); option.disabled=true;
+                option.textContent="Add friends first to invite them"; target.append(option);
+            });
+            return;
+        }
+        studyFriendsCache.forEach(friend => {
+            [select, addSelect].filter(Boolean).forEach(target => {
+                const option=document.createElement("option");
+                option.value=friend.uid;
+                option.textContent=`${friend.username || "Friend"} (@${friend.username || "member"})`;
+                target.append(option);
+            });
+        });
     } catch (error) { console.error("Study friends load failed", error); select.innerHTML="<option disabled>Could not load friends</option>"; }
 }
 
