@@ -2364,3 +2364,19 @@ body.fai-open:before{content:"";position:fixed;inset:0;background:rgba(5,5,15,.6
     .prayer-schedule-details strong { min-width:70px; }
 }
 
+
+
+/* Study Session group-style refresh */
+.study-room-tabs{display:flex;gap:8px;align-items:center;margin:18px 0 14px;padding:6px;background:rgba(255,255,255,.035);border:1px solid var(--border);border-radius:14px}
+.study-room-tab{flex:1;min-height:42px;border:0;border-radius:10px;background:transparent;color:var(--muted);font-size:11px;font-weight:900;letter-spacing:1px}
+.study-room-tab.active{color:#fff;background:var(--gradient);box-shadow:0 5px 18px rgba(99,102,241,.2)}
+.study-room-tab span{display:inline-grid;place-items:center;min-width:19px;height:19px;margin-left:5px;padding:0 5px;border-radius:20px;background:rgba(255,255,255,.12);color:#fff}
+.study-room-live{overflow:hidden;border-radius:22px;background:linear-gradient(160deg,rgba(20,20,42,.98),rgba(12,12,27,.98))}
+.study-live-header{padding:20px;border-bottom:1px solid var(--border)}
+.study-room-participants{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;padding:18px}
+.study-participant-row{display:flex;align-items:center;gap:10px;min-width:0;padding:11px 12px;border:1px solid var(--border);border-radius:15px;background:rgba(255,255,255,.035)}
+.study-participant-avatar{width:42px;height:42px;flex:0 0 42px;border-radius:50%;object-fit:cover;background:var(--card-light);border:2px solid rgba(139,92,246,.45)}
+.study-participant-chip{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
+.study-inline-invite-select{width:100%;padding:12px;border-radius:10px;background:#17172b;color:#fff;border:1px solid var(--border)}
+.study-room-status.paused{background:rgba(245,158,11,.14);color:#fbbf24}
+@media(max-width:600px){.study-room-tabs{gap:4px}.study-room-tab{font-size:10px}.study-room-participants{grid-template-columns:1fr}}
