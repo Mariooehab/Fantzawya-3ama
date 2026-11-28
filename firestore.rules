@@ -32,12 +32,17 @@ service cloud.firestore {
       let startedMillis = room.startedAt.toMillis();
       let requestedEndMillis = endAt.toMillis();
       let targetMillis = room.mode == 'countdown'
-        ? startedMillis + room.durationSeconds * 1000
+        ? room.targetEndAt is timestamp ? room.targetEndAt.toMillis() : startedMillis + room.durationSeconds * 1000
         : room.mode == 'until' && room.targetEndAt is timestamp
           ? room.targetEndAt.toMillis()
           : requestedEndMillis;
-      let effectiveEndMillis = targetMillis < requestedEndMillis ? targetMillis : requestedEndMillis;
-      let seconds = math.floor((effectiveEndMillis - startedMillis) / 1000);
+      let boundedEndMillis = targetMillis < requestedEndMillis ? targetMillis : requestedEndMillis;
+      let pausedAt = room.get('pausedAt', null);
+      let effectiveEndMillis = pausedAt is timestamp && pausedAt.toMillis() < boundedEndMillis
+        ? pausedAt.toMillis()
+        : boundedEndMillis;
+      let pausedSeconds = room.get('pausedSeconds', 0);
+      let seconds = math.floor((effectiveEndMillis - startedMillis) / 1000) - pausedSeconds;
       return seconds < 0 ? 0 : seconds;
     }
     function validParticipantEvent(action, participantUid) {
