@@ -3677,6 +3677,7 @@ async function loadStudyStats(uid) {
 /* REAL-TIME SHARED STUDY ROOMS */
 let studyRoomUnsubscribe = null;
 let studyInviteUnsubscribe = null;
+let currentStudyRoomFilter = "active";
 let activeStudyRoomUnsubscribe = null;
 let activeStudyRoomRemovalUnsubscribe = null;
 let studyRoomStatsUnsubscribe = null;
@@ -3801,6 +3802,8 @@ async function initStudyRooms(uid) {
             }
             const row = document.createElement("div");
             row.className = "study-room-row";
+            row.dataset.roomStatus = ["completed","cancelled"].includes(data.status) ? "ended" : "active";
+            row.hidden = row.dataset.roomStatus !== currentStudyRoomFilter;
             row.tabIndex = 0;
             const info = document.createElement("span");
             info.className = "study-room-row-info";
@@ -3902,6 +3905,16 @@ async function initStudyRooms(uid) {
         document.getElementById("studyInvitesList").textContent = `Could not load invitations (${error.code || "error"}).`;
     });
 }
+document.querySelectorAll("[data-room-filter]").forEach(button => button.addEventListener("click", () => {
+    currentStudyRoomFilter = button.dataset.roomFilter;
+    document.querySelectorAll("[data-room-filter]").forEach(tab => tab.classList.toggle("active", tab === button));
+    const rooms = document.getElementById("myStudyRoomsList");
+    if (rooms) [...rooms.querySelectorAll(".study-room-row")].forEach(row => row.hidden = currentStudyRoomFilter === "invites" || row.dataset.roomStatus !== currentStudyRoomFilter);
+    const inbox = document.querySelector(".study-room-inbox");
+    if (inbox) inbox.hidden = currentStudyRoomFilter !== "invites";
+    const activePanel = document.querySelector(".study-active-panel");
+    if (activePanel) activePanel.hidden = currentStudyRoomFilter === "invites";
+}));
 const studyModeSelect=document.getElementById("studyRoomMode");
 if(studyModeSelect) studyModeSelect.addEventListener("change",()=>{document.getElementById("studyCountdownFields").hidden=studyModeSelect.value!=="countdown";document.getElementById("studyUntilFields").hidden=studyModeSelect.value!=="until";});
 const createStudyRoomBtn=document.getElementById("createStudyRoomBtn");
