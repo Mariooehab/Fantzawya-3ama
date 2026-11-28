@@ -1,3 +1,4 @@
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-functions.js";
 import { auth, db } from "./firebase.js";
 import {
     calculateStudyStatistics,
@@ -29,6 +30,9 @@ import {
     updatePassword,
     getIdToken
 } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-auth.js";
+
+const functions = getFunctions(undefined, "us-central1");
+const joinLeagueCallable = httpsCallable(functions, "joinLeague");
 
 import {
     doc,
@@ -4917,21 +4921,30 @@ async function joinLeague() {
     const code = document.getElementById("leagueCodeInput").value.trim().toUpperCase();
     const status = document.getElementById("leagueJoinStatus");
     if (!user || !code) { status.textContent = "Enter an invite code."; return; }
-    const btn = document.getElementById("joinLeagueBtn"); btn.disabled = true; btn.textContent = "JOINING...";
+
+    const btn = document.getElementById("joinLeagueBtn");
+    btn.disabled = true;
+    btn.textContent = "JOINING...";
     try {
-        const matches = await runFirestoreOperation("query leagues by inviteCode",
-            () => getDocs(query(collection(db, "leagues"), where("inviteCode", "==", code))));
-        if (matches.empty) throw new Error("Invite code not found. Check the code and try again.");
-        const leagueDoc = matches.docs[0]; const league = leagueDoc.data();
-        if (league.memberUids.includes(user.uid)) throw new Error("You are already a member of this league.");
-        await runFirestoreOperation("add the signed-in UID to leagues/{leagueId}.memberUids",
-            () => updateDoc(doc(db, "leagues", leagueDoc.id), { memberUids: [...league.memberUids, user.uid] }));
+        const result = await runFirestoreOperation("join a Study League using its invite code", () =>
+            joinLeagueCallable({ inviteCode: code }));
+        const league = result.data;
+        if (!league?.leagueId || !Array.isArray(league.memberUids)) {
+            throw new Error("The server returned an invalid Study League response.");
+        }
+
         status.textContent = `Joined ${league.name}!`;
         document.getElementById("leagueCodeInput").value = "";
         await loadMyLeagues();
-        await openLeague(leagueDoc.id, { ...league, memberUids: [...league.memberUids, user.uid] });
-    } catch (error) { console.error(error); status.textContent = `Could not join: ${error.code || error.message}`; }
-    finally { btn.disabled = false; btn.textContent = "JOIN LEAGUE"; }
+        await openLeague(league.leagueId, league);
+    } catch (error) {
+        console.error("Could not join Study League:", error);
+        const message = error.message || "Unknown error";
+        status.textContent = `Could not join: ${message}`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "JOIN LEAGUE";
+    }
 }
 
 async function openLeague(leagueId, league) {
