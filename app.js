@@ -186,6 +186,8 @@ function chooseRequiredReligion(user, persistReligion) {
 }
 
 let authFlowInProgress = false;
+let activeAuthUid = null;
+let dashboardLoadedUid = null;
 let countdownInterval = null;
 let timerInterval = null;
 let timerMode = "countdown";
@@ -240,6 +242,43 @@ function showMessage(text, error = false) {
     if (text) (error ? console.error : console.info)("Fantzawya:", text);
 }
 
+function logFirestoreFailure(operation, error) {
+    console.error(`Firestore operation failed: ${operation}`, {
+        code: error?.code || "unknown",
+        message: error?.message || String(error),
+        error
+    });
+}
+
+async function runFirestoreOperation(operation, task) {
+    try {
+        return await task();
+    } catch (error) {
+        logFirestoreFailure(operation, error);
+        throw error;
+    }
+}
+
+function reportDashboardFeatureFailure(name, error) {
+    logFirestoreFailure(`dashboard feature: ${name}`, error);
+    const status = document.getElementById("dashboardLoadStatus");
+    if (!status) return;
+    const failures = new Set((status.dataset.failures || "").split("|").filter(Boolean));
+    failures.add(`${name} (${error.code || "error"})`);
+    status.dataset.failures = [...failures].join("|");
+    status.textContent = `Some dashboard features could not be loaded: ${[...failures].join(", ")}. Your account is still signed in; reload to retry.`;
+    status.hidden = false;
+}
+
+async function runDashboardFeature(name, task) {
+    try {
+        return await task();
+    } catch (error) {
+        reportDashboardFeatureFailure(name, error);
+        return null;
+    }
+}
+
 function setTimerMessage(text, error = false) {
     timerMessage.textContent = text;
     timerMessage.classList.toggle("error", error);
@@ -265,13 +304,24 @@ tabs.forEach(tab => {
    This repairs that half-created account instead of leaving registration stuck. */
 async function ensureAccountDocuments(user, fallbackUsername = "", religion = null) {
     const userRef = doc(db, "users", user.uid);
-    const userSnapshot = await getDoc(userRef);
+    let userSnapshot;
+    try {
+        userSnapshot = await getDoc(userRef);
+    } catch (error) {
+        logFirestoreFailure("read users/{uid} during account restoration", error);
+        throw error;
+    }
     let profile = userSnapshot.exists() ? userSnapshot.data() : null;
 
     if (!profile) {
         const publicRef = doc(db, "publicProfiles", user.uid);
-        const publicSnapshot = await getDoc(publicRef);
-        const recoveredName = (fallbackUsername || publicSnapshot.data()?.username || user.displayName || user.email?.split("@")[0] || "New User")
+        let publicSnapshot = null;
+        try {
+            publicSnapshot = await getDoc(publicRef);
+        } catch (error) {
+            logFirestoreFailure("read publicProfiles/{uid} during account restoration", error);
+        }
+        const recoveredName = (fallbackUsername || publicSnapshot?.data()?.username || user.displayName || user.email?.split("@")[0] || "New User")
             .trim().replace(/\s+/g, " ").slice(0, 20);
         if (recoveredName.length < 3) throw new Error("Choose a username with at least 3 characters to finish setting up this account.");
         profile = {
@@ -286,21 +336,30 @@ async function ensureAccountDocuments(user, fallbackUsername = "", religion = nu
             studyTimeZone: getLocalStudyTimeZone(),
             ...(isValidReligion(religion) ? { religion } : {})
         };
-        await setDoc(userRef, profile);
+        try {
+            await setDoc(userRef, profile);
+        } catch (error) {
+            logFirestoreFailure("create users/{uid} during account restoration", error);
+            throw error;
+        }
         profile = { ...profile, username: recoveredName };
     }
 
     const username = profile.username || fallbackUsername || user.email?.split("@")[0] || "New User";
-    await setDoc(doc(db, "publicProfiles", user.uid), {
-        uid: user.uid,
-        username,
-        usernameLower: username.toLowerCase(),
-        avatarUrl: profile.avatarUrl || "",
-        coverUrl: profile.coverUrl || "",
-        studyTimeZone: profile.studyTimeZone || getLocalStudyTimeZone(),
-        ...(isOwnerAccount(user) ? { isOwner: true } : {}),
-        updatedAt: serverTimestamp()
-    }, { merge: true });
+    try {
+        await setDoc(doc(db, "publicProfiles", user.uid), {
+            uid: user.uid,
+            username,
+            usernameLower: username.toLowerCase(),
+            avatarUrl: profile.avatarUrl || "",
+            coverUrl: profile.coverUrl || "",
+            studyTimeZone: profile.studyTimeZone || getLocalStudyTimeZone(),
+            ...(isOwnerAccount(user) ? { isOwner: true } : {}),
+            updatedAt: serverTimestamp()
+        }, { merge: true });
+    } catch (error) {
+        logFirestoreFailure("create or synchronize publicProfiles/{uid} during account restoration", error);
+    }
     return profile;
 }
 
@@ -363,8 +422,10 @@ registerForm.addEventListener("submit", async event => {
         await ensureAccountDocuments(result.user, username, religion);
         registerForm.reset();
         await appAlert("Account created successfully!");
-        await loadDashboard(result.user);
-        await offerOwnerFriendPrompt(result.user);
+        const dashboardLoaded = await loadDashboard(result.user);
+        if (dashboardLoaded) {
+            await runDashboardFeature("welcome owner prompt", () => offerOwnerFriendPrompt(result.user));
+        }
     } catch (error) {
         console.error("Registration error:", error);
         const errors = {
@@ -402,15 +463,25 @@ loginForm.addEventListener("submit", async event => {
         const result = await signInWithEmailAndPassword(auth, email, password);
         await loadDashboard(result.user);
     } catch (error) {
-        console.error("Login error:", error);
-        showMessage(
-            error.code === "auth/invalid-credential" || error.code === "auth/user-not-found" || error.code === "auth/wrong-password"
-                ? "Incorrect email or password."
-                : error.code === "auth/operation-not-allowed"
-                    ? "Enable Email/Password in Firebase Console → Authentication → Sign-in method."
-                    : error.message,
-            true
-        );
+        if (String(error.code || "").startsWith("auth/")) {
+            console.error("Firebase Authentication sign-in failed:", { code: error.code, message: error.message, error });
+            showMessage(
+                error.code === "auth/invalid-credential" || error.code === "auth/user-not-found" || error.code === "auth/wrong-password"
+                    ? "Incorrect email or password. Firebase Authentication rejected these credentials."
+                    : error.code === "auth/operation-not-allowed"
+                        ? "Enable Email/Password in Firebase Console → Authentication → Sign-in method."
+                        : error.message,
+                true
+            );
+        } else {
+            console.error("Signed-in user dashboard initialization failed:", { code: error.code || "unknown", message: error.message || String(error), error });
+            showMessage(
+                auth.currentUser
+                    ? `You're signed in, but dashboard initialization failed (${error.code || "error"}). You have not been logged out.`
+                    : error.message || "Could not initialize the dashboard.",
+                true
+            );
+        }
     } finally {
         authFlowInProgress = false;
         button.disabled = false;
@@ -421,109 +492,156 @@ loginForm.addEventListener("submit", async event => {
 
 /* DASHBOARD */
 async function loadDashboard(user, fallbackUsername = "") {
+    if (!user || auth.currentUser?.uid !== user.uid) return false;
+    if (activeAuthUid && activeAuthUid !== user.uid) {
+        stopAuthenticatedSubscriptions();
+        dashboard.hidden = true;
+        mobileNav.hidden = true;
+        authContainer.hidden = false;
+    }
+    activeAuthUid = user.uid;
+    dashboardLoadedUid = null;
+
+    const featureStatus = document.getElementById("dashboardLoadStatus");
+    if (featureStatus) {
+        featureStatus.hidden = true;
+        featureStatus.textContent = "";
+        featureStatus.dataset.failures = "";
+    }
+
+    let profile;
+    let profileOperation = "read users/{uid} profile";
     try {
-        let profileSnapshot = await getDoc(doc(db, "users", user.uid));
+        let profileSnapshot = await runFirestoreOperation("read users/{uid} profile", () => getDoc(doc(db, "users", user.uid)));
         if (!profileSnapshot.exists()) {
+            profileOperation = "restore missing users/{uid} profile";
             await chooseRequiredReligion(user, religion => ensureAccountDocuments(user, fallbackUsername, religion));
-            profileSnapshot = await getDoc(doc(db, "users", user.uid));
+            profileOperation = "read restored users/{uid} profile";
+            profileSnapshot = await runFirestoreOperation(profileOperation, () => getDoc(doc(db, "users", user.uid)));
         }
         if (!profileSnapshot.exists()) throw new Error("Could not restore this account profile. Check Firestore Rules.");
 
-        const profile = profileSnapshot.data();
+        profile = profileSnapshot.data();
         if (!isValidReligion(profile.religion)) {
+            profileOperation = "save required users/{uid}.religion";
             profile.religion = await chooseRequiredReligion(user, religion =>
                 updateDoc(doc(db, "users", user.uid), { religion })
             );
         }
-        const studyTimeZone = getLocalStudyTimeZone();
-        if (profile.studyTimeZone !== studyTimeZone) {
-            await updateDoc(doc(db, "users", user.uid), { studyTimeZone });
-            profile.studyTimeZone = studyTimeZone;
-        }
-        currentProfile = profile;
-        updatePrayerNavigationVisibility();
-        const publicProfileRef = doc(db, "publicProfiles", user.uid);
-        const publicProfileSnapshot = await getDoc(publicProfileRef);
-        if (!publicProfileSnapshot.exists()) {
-            await setDoc(publicProfileRef, {
-                uid: user.uid,
-                username: profile.username || "User",
-                usernameLower: (profile.username || "User").toLowerCase(),
-                avatarUrl: profile.avatarUrl || "",
-                coverUrl: profile.coverUrl || "",
-                studyTimeZone,
-                ...(isOwnerAccount(user) ? { isOwner: true } : {}),
-                updatedAt: serverTimestamp()
-            });
-        } else {
-            const publicProfile = publicProfileSnapshot.data();
-            const publicProfileUpdates = {};
-            if (publicProfile.studyTimeZone !== studyTimeZone) publicProfileUpdates.studyTimeZone = studyTimeZone;
-            if (isOwnerAccount(user) && publicProfile.isOwner !== true) publicProfileUpdates.isOwner = true;
-            if (Object.keys(publicProfileUpdates).length) {
-                publicProfileUpdates.updatedAt = serverTimestamp();
-                await updateDoc(publicProfileRef, publicProfileUpdates);
-            }
-        }
-
-        const username = profile.username || "User";
-        const email = profile.email || user.email || "";
-        const xp = Number(profile.xp) || 0;
-        const initial = username.charAt(0).toUpperCase();
-
-        document.getElementById("welcomeUsername").textContent = username;
-        document.getElementById("sidebarUsername").textContent = username;
-        document.getElementById("topbarUsername").textContent = username;
-        document.getElementById("profileUsername").textContent = username;
-        document.getElementById("profileEmail").textContent = email;
-        document.getElementById("profileReligionValue").textContent = profile.religion === "muslim" ? "Muslim" : "Christian";
-        document.getElementById("editReligion").value = profile.religion;
-        ["sidebarUsername", "topbarUsername", "profileUsername"].forEach(id => {
-            const el = document.getElementById(id);
-            if (!el) return;
-            el.querySelectorAll(".owner-tag").forEach(tag => tag.remove());
-            if (isOwnerAccount(user)) appendOwnerTag(el);
-        });
-        const profileBadge = document.querySelector(".profile-badge");
-        if (profileBadge) {
-            profileBadge.textContent = isOwnerAccount(user) ? "👑 WEBSITE OWNER & MAKER" : "COMMUNITY MEMBER";
-            profileBadge.classList.toggle("owner-profile-badge", isOwnerAccount(user));
-        }
-        ["sidebarAvatar", "topbarAvatar", "profileAvatar"].forEach(id => {
-            const avatar = document.getElementById(id);
-            if (avatar) avatar.classList.toggle("owner-avatar", isOwnerAccount(user));
-        });
-        document.getElementById("xpValue").textContent = xp.toLocaleString();
-        document.getElementById("streakValue").textContent = "0";
-        document.getElementById("profileXP").textContent = `${xp.toLocaleString()} XP`;
-        document.getElementById("sidebarAvatar").textContent = initial;
-        document.getElementById("topbarAvatar").textContent = initial;
-        document.getElementById("profileAvatar").textContent = initial;
-        document.getElementById("editUsername").value = username;
-        document.getElementById("editAvatarUrl").value = profile.avatarUrl || "";
-        document.getElementById("editCoverUrl").value = profile.coverUrl || "";
-        applyCover(profile.coverUrl || "");
-        document.getElementById("newEmail").value = user.email || email;
-        applyAvatar(profile.avatarUrl || "", initial);
-
-        authContainer.hidden = true;
-        dashboard.hidden = false;
-        mobileNav.hidden = false;
-        showPage(location.hash.replace("#", "") || "overview");
-        initializePrayerReminderSystem(user.uid, profile);
-
-        loadExamDate(user.uid);
-        await loadStudyStats(user.uid);
-        await loadCommunityFeatures(user.uid);
-        await loadFriends(user.uid);
-        await restoreStudySession(user.uid);
     } catch (error) {
-        console.error("Dashboard error:", error);
+        if (auth.currentUser?.uid !== user.uid) return false;
+        logFirestoreFailure(profileOperation, error);
         authContainer.hidden = false;
         dashboard.hidden = true;
         mobileNav.hidden = true;
-        showMessage(error.message, true);
+        showMessage(`You're signed in, but your profile could not be loaded (${error.code || "error"}). You have not been logged out. Check your connection or Firestore access, then retry.`, true);
+        return false;
     }
+
+    if (auth.currentUser?.uid !== user.uid || activeAuthUid !== user.uid) return false;
+    const studyTimeZone = getLocalStudyTimeZone();
+    if (profile.studyTimeZone !== studyTimeZone) {
+        try {
+            await updateDoc(doc(db, "users", user.uid), { studyTimeZone });
+        } catch (error) {
+            reportDashboardFeatureFailure("profile timezone sync", error);
+        }
+        profile.studyTimeZone = studyTimeZone;
+    }
+    if (auth.currentUser?.uid !== user.uid || activeAuthUid !== user.uid) return false;
+    currentProfile = profile;
+    updatePrayerNavigationVisibility();
+
+    await runDashboardFeature("public profile synchronization", async () => {
+        const publicProfileRef = doc(db, "publicProfiles", user.uid);
+        const publicProfileSnapshot = await runFirestoreOperation("read publicProfiles/{uid} during dashboard load", () => getDoc(publicProfileRef));
+        const username = profile.username || "User";
+        const requiredFields = {
+            uid: user.uid,
+            username,
+            usernameLower: username.toLowerCase(),
+            avatarUrl: profile.avatarUrl || "",
+            coverUrl: profile.coverUrl || "",
+            studyTimeZone
+        };
+        const publicProfileUpdates = {};
+        if (!publicProfileSnapshot.exists()) {
+            Object.assign(publicProfileUpdates, requiredFields);
+            if (isOwnerAccount(user)) publicProfileUpdates.isOwner = true;
+        } else {
+            const publicProfile = publicProfileSnapshot.data();
+            Object.entries(requiredFields).forEach(([key, value]) => {
+                if (!(key in publicProfile)) publicProfileUpdates[key] = value;
+            });
+            if (publicProfile.studyTimeZone !== studyTimeZone) publicProfileUpdates.studyTimeZone = studyTimeZone;
+            if (isOwnerAccount(user) && publicProfile.isOwner !== true) publicProfileUpdates.isOwner = true;
+        }
+        if (Object.keys(publicProfileUpdates).length) {
+            publicProfileUpdates.updatedAt = serverTimestamp();
+            if (publicProfileSnapshot.exists()) {
+                await runFirestoreOperation("update publicProfiles/{uid} during dashboard load", () => updateDoc(publicProfileRef, publicProfileUpdates));
+            } else {
+                await runFirestoreOperation("create publicProfiles/{uid} during dashboard load", () => setDoc(publicProfileRef, publicProfileUpdates));
+            }
+        }
+    });
+    if (auth.currentUser?.uid !== user.uid || activeAuthUid !== user.uid) return false;
+
+    const username = profile.username || "User";
+    const email = profile.email || user.email || "";
+    const xp = Number(profile.xp) || 0;
+    const initial = username.charAt(0).toUpperCase();
+
+    document.getElementById("welcomeUsername").textContent = username;
+    document.getElementById("sidebarUsername").textContent = username;
+    document.getElementById("topbarUsername").textContent = username;
+    document.getElementById("profileUsername").textContent = username;
+    document.getElementById("profileEmail").textContent = email;
+    document.getElementById("profileReligionValue").textContent = profile.religion === "muslim" ? "Muslim" : "Christian";
+    document.getElementById("editReligion").value = profile.religion;
+    ["sidebarUsername", "topbarUsername", "profileUsername"].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.querySelectorAll(".owner-tag").forEach(tag => tag.remove());
+        if (isOwnerAccount(user)) appendOwnerTag(el);
+    });
+    const profileBadge = document.querySelector(".profile-badge");
+    if (profileBadge) {
+        profileBadge.textContent = isOwnerAccount(user) ? "👑 WEBSITE OWNER & MAKER" : "COMMUNITY MEMBER";
+        profileBadge.classList.toggle("owner-profile-badge", isOwnerAccount(user));
+    }
+    ["sidebarAvatar", "topbarAvatar", "profileAvatar"].forEach(id => {
+        const avatar = document.getElementById(id);
+        if (avatar) avatar.classList.toggle("owner-avatar", isOwnerAccount(user));
+    });
+    document.getElementById("xpValue").textContent = xp.toLocaleString();
+    document.getElementById("streakValue").textContent = "0";
+    document.getElementById("profileXP").textContent = `${xp.toLocaleString()} XP`;
+    document.getElementById("sidebarAvatar").textContent = initial;
+    document.getElementById("topbarAvatar").textContent = initial;
+    document.getElementById("profileAvatar").textContent = initial;
+    document.getElementById("editUsername").value = username;
+    document.getElementById("editAvatarUrl").value = profile.avatarUrl || "";
+    document.getElementById("editCoverUrl").value = profile.coverUrl || "";
+    applyCover(profile.coverUrl || "");
+    document.getElementById("newEmail").value = user.email || email;
+    applyAvatar(profile.avatarUrl || "", initial);
+
+    authContainer.hidden = true;
+    dashboard.hidden = false;
+    mobileNav.hidden = false;
+    dashboardLoadedUid = user.uid;
+    showPage(location.hash.replace("#", "") || "overview");
+    const runForCurrentUser = (name, task) => runDashboardFeature(name, async () => {
+        if (auth.currentUser?.uid === user.uid) return task();
+    });
+    await runForCurrentUser("prayer reminder initialization", async () => initializePrayerReminderSystem(user.uid, profile));
+    await runForCurrentUser("exam countdown initialization", async () => loadExamDate(user.uid));
+    await runForCurrentUser("study statistics", async () => loadStudyStats(user.uid));
+    await runForCurrentUser("community features", async () => loadCommunityFeatures(user.uid));
+    await runForCurrentUser("friends", async () => loadFriends(user.uid));
+    await runForCurrentUser("study session restoration", async () => restoreStudySession(user.uid));
+    return true;
 }
 
 
@@ -1549,6 +1667,7 @@ function synchronizePrayerProfile(data, uid) {
 }
 
 function initializePrayerReminderSystem(uid, profile) {
+    if (auth.currentUser?.uid !== uid) return;
     if (prayerTicker) clearInterval(prayerTicker);
     if (prayerUserDocumentUnsubscribe) prayerUserDocumentUnsubscribe();
     prayerUserDocumentUnsubscribe = null;
@@ -2142,12 +2261,14 @@ async function sendFriendRequest(person, button) {
     const user = auth.currentUser;
     button.disabled = true;
     try {
-        const existingA = await getDocs(query(collection(db, "friendRequests"), where("senderUid", "==", user.uid), where("recipientUid", "==", person.uid)));
-        const existingB = await getDocs(query(collection(db, "friendRequests"), where("senderUid", "==", person.uid), where("recipientUid", "==", user.uid)));
+        const existingA = await runFirestoreOperation("query friendRequests sent by the current user", () =>
+            getDocs(query(collection(db, "friendRequests"), where("senderUid", "==", user.uid), where("recipientUid", "==", person.uid))));
+        const existingB = await runFirestoreOperation("query friendRequests received from this user", () =>
+            getDocs(query(collection(db, "friendRequests"), where("senderUid", "==", person.uid), where("recipientUid", "==", user.uid))));
         if ([...existingA.docs, ...existingB.docs].some(item => ["pending", "accepted"].includes(item.data().status))) {
             button.textContent = "REQUEST EXISTS"; return false;
         }
-        await addDoc(collection(db, "friendRequests"), {
+        await runFirestoreOperation("create friendRequests/{requestId}", () => addDoc(collection(db, "friendRequests"), {
             senderUid: user.uid,
             senderUsername: currentProfile.username,
             senderAvatarUrl: currentProfile.avatarUrl || "",
@@ -2156,12 +2277,12 @@ async function sendFriendRequest(person, button) {
             recipientAvatarUrl: person.avatarUrl || "",
             status: "pending",
             createdAt: serverTimestamp()
-        });
+        }));
         button.textContent = "REQUEST SENT";
         await loadFriends(user.uid);
         return true;
     } catch (error) {
-        console.error("Friend request error:", error);
+        console.error("Friend request operation failed:", { code: error.code || "unknown", message: error.message || String(error), error });
         button.disabled = false;
         appAlert(error.code === "permission-denied" ? "Firestore denied this request. Publish the updated Rules." : error.message);
     }
@@ -2170,16 +2291,21 @@ async function sendFriendRequest(person, button) {
 async function loadFriends(uid) {
     const requestsList = document.getElementById("friendRequestsList");
     const friendsList = document.getElementById("friendsList");
-    if (!requestsList || !friendsList) return;
+    if (!requestsList || !friendsList || auth.currentUser?.uid !== uid) return;
     requestsList.textContent = "Loading requests...";
     friendsList.textContent = "Loading friends...";
     try {
-        const [incoming, outgoing, acceptedA, acceptedB] = await Promise.all([
-            getDocs(query(collection(db, "friendRequests"), where("recipientUid", "==", uid), where("status", "==", "pending"))),
-            getDocs(query(collection(db, "friendRequests"), where("senderUid", "==", uid), where("status", "==", "pending"))),
-            getDocs(query(collection(db, "friendRequests"), where("recipientUid", "==", uid), where("status", "==", "accepted"))),
-            getDocs(query(collection(db, "friendRequests"), where("senderUid", "==", uid), where("status", "==", "accepted")))
-        ]);
+        const requestQueries = [
+            ["incoming pending", query(collection(db, "friendRequests"), where("recipientUid", "==", uid), where("status", "==", "pending"))],
+            ["outgoing pending", query(collection(db, "friendRequests"), where("senderUid", "==", uid), where("status", "==", "pending"))],
+            ["incoming accepted", query(collection(db, "friendRequests"), where("recipientUid", "==", uid), where("status", "==", "accepted"))],
+            ["outgoing accepted", query(collection(db, "friendRequests"), where("senderUid", "==", uid), where("status", "==", "accepted"))]
+        ];
+        const [incoming, outgoing, acceptedA, acceptedB] = await Promise.all(requestQueries.map(async ([name, requestQuery]) => {
+            return runFirestoreOperation(`query friendRequests (${name}, current user is filtered as recipientUid or senderUid)`,
+                () => getDocs(requestQuery));
+        }));
+        if (auth.currentUser?.uid !== uid) return;
         requestsList.replaceChildren();
         const requestDocs = [...incoming.docs.map(d => ({ doc: d, incoming: true })), ...outgoing.docs.map(d => ({ doc: d, incoming: false }))];
         if (!requestDocs.length) requestsList.textContent = "No pending friend requests.";
@@ -2203,8 +2329,12 @@ async function loadFriends(uid) {
             ...acceptedB.docs.map(d => d.data().senderUid === uid ? d.data().recipientUid : d.data().senderUid)
         ])];
         if (!friendUids.length) friendsList.textContent = "No friends yet. Search for a username to add someone!";
-        const publicProfiles = await Promise.all(friendUids.map(friendUid => getDoc(doc(db, "publicProfiles", friendUid))));
-        const favoriteSnapshots = await Promise.all(friendUids.map(friendUid => getDoc(doc(db, "users", uid, "friendSettings", friendUid))));
+        const publicProfiles = await Promise.all(friendUids.map(friendUid =>
+            runFirestoreOperation("read publicProfiles/{friendUid} for Friends",
+                () => getDoc(doc(db, "publicProfiles", friendUid)))));
+        const favoriteSnapshots = await Promise.all(friendUids.map(friendUid =>
+            runFirestoreOperation("read users/{uid}/friendSettings/{friendUid}",
+                () => getDoc(doc(db, "users", uid, "friendSettings", friendUid)))));
         publicProfiles.forEach((profileSnap, index) => {
             if (!profileSnap.exists()) return;
             const person = { ...profileSnap.data(), uid: friendUids[index] };
@@ -2226,9 +2356,10 @@ async function loadFriends(uid) {
             row.append(identity, star); friendsList.append(row);
         });
     } catch (error) {
-        console.error("Could not load friends:", error);
-        requestsList.textContent = "Could not load requests. Check Firestore Rules.";
-        friendsList.textContent = "Could not load friends. Check Firestore Rules.";
+        console.error("Could not load Friends:", { code: error.code || "unknown", message: error.message || String(error), error });
+        if (auth.currentUser?.uid !== uid) return;
+        requestsList.textContent = `Could not load requests (${error.code || "error"}).`;
+        friendsList.textContent = `Could not load friends (${error.code || "error"}).`;
     }
 }
 
@@ -3223,6 +3354,7 @@ async function resetStudySession() {
 }
 
 async function restoreStudySession(uid) {
+    if (auth.currentUser?.uid !== uid) return;
     loadTimerSettings(uid);
     const raw = localStorage.getItem(getTimerStorageKey(uid));
     if (!raw) {
@@ -3449,8 +3581,10 @@ function ensureStudyStatsDayRefresh(uid, timeZone) {
 
 async function fetchStudyRecords(uid) {
     const [sessionsSnapshot, roomSessionsSnapshot] = await Promise.all([
-        getDocs(query(collection(db, "studySessions"), where("uid", "==", uid))),
-        getDocs(query(collection(db, "studyRoomCompletions"), where("uid", "==", uid)))
+        runFirestoreOperation("query studySessions for the signed-in user's study statistics", () =>
+            getDocs(query(collection(db, "studySessions"), where("uid", "==", uid)))),
+        runFirestoreOperation("query studyRoomCompletions for the signed-in user's study statistics", () =>
+            getDocs(query(collection(db, "studyRoomCompletions"), where("uid", "==", uid))))
     ]);
     return normalizeStudyRecords(sessionsSnapshot.docs, roomSessionsSnapshot.docs, uid);
 }
@@ -3476,6 +3610,7 @@ function renderStudySessionHistory(container, records, timeZone) {
 }
 
 async function loadStudyStats(uid) {
+    if (auth.currentUser?.uid !== uid) return null;
     try {
         const records = await fetchStudyRecords(uid);
         if (auth.currentUser?.uid !== uid) return null;
@@ -3609,8 +3744,10 @@ async function loadStudyFriends(uid) {
     if (!select) return;
     try {
         const [a, b] = await Promise.all([
-            getDocs(query(collection(db, "friendRequests"), where("senderUid", "==", uid), where("status", "==", "accepted"))),
-            getDocs(query(collection(db, "friendRequests"), where("recipientUid", "==", uid), where("status", "==", "accepted")))
+            runFirestoreOperation("query accepted friendRequests sent by the current user for Study Rooms", () =>
+                getDocs(query(collection(db, "friendRequests"), where("senderUid", "==", uid), where("status", "==", "accepted")))),
+            runFirestoreOperation("query accepted friendRequests received by the current user for Study Rooms", () =>
+                getDocs(query(collection(db, "friendRequests"), where("recipientUid", "==", uid), where("status", "==", "accepted"))))
         ]);
         const ids = [...new Set([...a.docs, ...b.docs].map(d => d.data().senderUid === uid ? d.data().recipientUid : d.data().senderUid))];
         const profiles = await Promise.all(ids.map(id => getDoc(doc(db, "publicProfiles", id))));
@@ -3621,12 +3758,15 @@ async function loadStudyFriends(uid) {
     } catch (error) { console.error("Study friends load failed", error); select.innerHTML="<option disabled>Could not load friends</option>"; }
 }
 async function initStudyRooms(uid) {
+    if (auth.currentUser?.uid !== uid) return;
     await loadStudyFriends(uid);
+    if (auth.currentUser?.uid !== uid) return;
     if (studyRoomUnsubscribe) studyRoomUnsubscribe();
     if (studyInviteUnsubscribe) studyInviteUnsubscribe();
     if (studyRoomStatsUnsubscribe) studyRoomStatsUnsubscribe();
     if (studySessionStatsUnsubscribe) studySessionStatsUnsubscribe();
     const refreshStudyStats = () => {
+        if (auth.currentUser?.uid !== uid) return;
         if (studyStatsRefreshTimer) clearTimeout(studyStatsRefreshTimer);
         studyStatsRefreshTimer = setTimeout(() => loadStudyStats(uid), 100);
     };
@@ -3639,6 +3779,7 @@ async function initStudyRooms(uid) {
         where("uid", "==", uid)
     ), refreshStudyStats, error => console.error("Study timer stats sync failed:", error));
     studyRoomUnsubscribe = onSnapshot(query(collection(db, "studyRooms"), where("memberUids", "array-contains", uid)), snap => {
+        if (auth.currentUser?.uid !== uid) return;
         const list = document.getElementById("myStudyRoomsList");
         if (!list) return;
         list.replaceChildren();
@@ -3711,15 +3852,50 @@ async function initStudyRooms(uid) {
         });
         if (!activeStudyRoomId && snap.docs.length) openStudyRoom(snap.docs[0].id);
     }, error => {
+        if (auth.currentUser?.uid !== uid) return;
         console.error("Study room list sync failed:", error);
-        document.getElementById("myStudyRoomsList").textContent = "Could not load rooms. Check Firestore Rules.";
+        document.getElementById("myStudyRoomsList").textContent = `Could not load rooms (${error.code || "error"}).`;
     });
     studyInviteUnsubscribe = onSnapshot(query(collection(db, "studyRoomInvites"), where("recipientUid", "==", uid), where("status", "==", "pending")), snap => {
-        const list=document.getElementById("studyInvitesList"), count=document.getElementById("studyInviteCount"); if(!list)return;
-        count.textContent=String(snap.size); list.replaceChildren();
-        if(snap.empty){list.textContent="No new study invitations.";return;}
-        snap.forEach(item=>{const d=item.data(),row=document.createElement("div");row.className="study-invite-row";const details=document.createElement("div");const title=document.createElement("strong");title.textContent=`${d.senderUsername || "A friend"} invited you`;const sub=document.createElement("small");sub.textContent=`${d.roomName || "Study room"} • ${d.mode || "stopwatch"}`;details.append(title,sub);const actions=document.createElement("div");actions.className="study-invite-actions";const accept=document.createElement("button");accept.className="mini-action accept";accept.textContent="JOIN";accept.addEventListener("click",()=>respondStudyInvite(item.id,d.roomId,true));const decline=document.createElement("button");decline.className="mini-action";decline.textContent="DECLINE";decline.addEventListener("click",()=>respondStudyInvite(item.id,d.roomId,false));actions.append(accept,decline);row.append(details,actions);list.append(row);});
-    }, error=>{console.error(error);document.getElementById("studyInvitesList").textContent="Could not load invitations.";});
+        if (auth.currentUser?.uid !== uid) return;
+        const list = document.getElementById("studyInvitesList");
+        const count = document.getElementById("studyInviteCount");
+        if (!list) return;
+        count.textContent = String(snap.size);
+        list.replaceChildren();
+        if (snap.empty) {
+            list.textContent = "No new study invitations.";
+            return;
+        }
+        snap.forEach(item => {
+            const data = item.data();
+            const row = document.createElement("div");
+            row.className = "study-invite-row";
+            const details = document.createElement("div");
+            const title = document.createElement("strong");
+            title.textContent = `${data.senderUsername || "A friend"} invited you`;
+            const subtitle = document.createElement("small");
+            subtitle.textContent = `${data.roomName || "Study room"} • ${data.mode || "stopwatch"}`;
+            details.append(title, subtitle);
+            const actions = document.createElement("div");
+            actions.className = "study-invite-actions";
+            const accept = document.createElement("button");
+            accept.className = "mini-action accept";
+            accept.textContent = "JOIN";
+            accept.addEventListener("click", () => respondStudyInvite(item.id, data.roomId, true));
+            const decline = document.createElement("button");
+            decline.className = "mini-action";
+            decline.textContent = "DECLINE";
+            decline.addEventListener("click", () => respondStudyInvite(item.id, data.roomId, false));
+            actions.append(accept, decline);
+            row.append(details, actions);
+            list.append(row);
+        });
+    }, error => {
+        if (auth.currentUser?.uid !== uid) return;
+        console.error("Study invitation listener failed:", error);
+        document.getElementById("studyInvitesList").textContent = `Could not load invitations (${error.code || "error"}).`;
+    });
 }
 const studyModeSelect=document.getElementById("studyRoomMode");
 if(studyModeSelect) studyModeSelect.addEventListener("change",()=>{document.getElementById("studyCountdownFields").hidden=studyModeSelect.value!=="countdown";document.getElementById("studyUntilFields").hidden=studyModeSelect.value!=="until";});
@@ -3773,6 +3949,8 @@ async function respondStudyInvite(inviteId,roomId,accept){
     catch(error){console.error(error);    showAppPopup(`Could not ${accept?"join":"decline"} invitation: ${error.message||error.code}`, { error: true });}
 }
 async function openStudyRoom(roomId){
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
     if (activeStudyRoomUnsubscribe) activeStudyRoomUnsubscribe();
     if (activeStudyRoomRemovalUnsubscribe) activeStudyRoomRemovalUnsubscribe();
     stopStudyRoomTicker();
@@ -3784,8 +3962,8 @@ async function openStudyRoom(roomId){
     const panel = document.getElementById("studyRoomLivePanel");
     panel.hidden = false;
     document.getElementById("studyLiveRoomTitle").textContent = "Loading room...";
-    const uid = auth.currentUser?.uid;
     activeStudyRoomUnsubscribe = onSnapshot(doc(db, "studyRooms", roomId), snapshot => {
+        if (activeStudyRoomId !== roomId || auth.currentUser?.uid !== uid) return;
         if (!snapshot.exists()) {
             closeActiveStudyRoom();
             return;
@@ -4498,10 +4676,13 @@ function formatChallengeTime(seconds) {
 }
 
 async function loadCommunityFeatures(uid) {
-    await Promise.all([loadWeeklyLeaderboard(uid)]);
-    initStudyLeaderboardUpdates(uid);
-    await initStudyRooms(uid);
-    await Promise.all([loadMyLeagues(), loadTodoList()]);
+    await runDashboardFeature("weekly leaderboard", () => loadWeeklyLeaderboard(uid));
+    await runDashboardFeature("leaderboard updates", async () => initStudyLeaderboardUpdates(uid));
+    await Promise.all([
+        runDashboardFeature("study rooms", () => initStudyRooms(uid)),
+        runDashboardFeature("leagues", () => loadMyLeagues()),
+        runDashboardFeature("to-do list", () => loadTodoList())
+    ]);
 }
 
 async function loadChallenges(uid) {
@@ -4585,13 +4766,15 @@ async function joinChallenge(uid, challenge) {
 }
 
 async function loadWeeklyLeaderboard(currentUid) {
+    if (auth.currentUser?.uid !== currentUid) return;
     const list = document.getElementById("leaderboardList");
     try {
         const [sessionsSnapshot, roomSessionsSnapshot, profilesSnapshot] = await Promise.all([
-            getDocs(collection(db, "studySessions")),
-            getDocs(collection(db, "studyRoomCompletions")),
-            getDocs(collection(db, "publicProfiles"))
+            runFirestoreOperation("read studySessions for the global leaderboard", () => getDocs(collection(db, "studySessions"))),
+            runFirestoreOperation("read studyRoomCompletions for the global leaderboard", () => getDocs(collection(db, "studyRoomCompletions"))),
+            runFirestoreOperation("read publicProfiles for the global leaderboard", () => getDocs(collection(db, "publicProfiles")))
         ]);
+        if (auth.currentUser?.uid !== currentUid) return;
         const records = normalizeStudyRecords(sessionsSnapshot.docs, roomSessionsSnapshot.docs);
         const sessionNames = new Map();
         sessionsSnapshot.forEach(item => {
@@ -4641,7 +4824,7 @@ async function loadWeeklyLeaderboard(currentUid) {
         });
     } catch (error) {
         console.error("Could not load leaderboard:", error);
-        list.textContent = "Could not load leaderboard. Check Firestore Rules.";
+        list.textContent = `Could not load leaderboard (${error.code || "error"}).`;
     }
 }
 
@@ -4658,6 +4841,7 @@ function stopStudyLeaderboardUpdates() {
 }
 
 function initStudyLeaderboardUpdates(uid) {
+    if (auth.currentUser?.uid !== uid) return;
     if (studyLeaderboardUid === uid && studyLeaderboardUnsubscribers.length) return;
     stopStudyLeaderboardUpdates();
     studyLeaderboardUid = uid;
@@ -4690,7 +4874,8 @@ async function loadMyLeagues() {
     if (!list || !auth.currentUser) return;
     list.textContent = "Loading leagues...";
     try {
-        const snap = await getDocs(query(collection(db, "leagues"), where("memberUids", "array-contains", auth.currentUser.uid)));
+        const snap = await runFirestoreOperation("query leagues where memberUids array-contains the signed-in UID",
+            () => getDocs(query(collection(db, "leagues"), where("memberUids", "array-contains", auth.currentUser.uid))));
         list.replaceChildren();
         if (snap.empty) { list.textContent = "You are not in a league yet. Create one or join with a code."; return; }
         snap.forEach(item => {
@@ -4702,7 +4887,10 @@ async function loadMyLeagues() {
             row.append(title, button); list.append(row);
         });
         if (!activeLeagueId && !snap.empty) openLeague(snap.docs[0].id, snap.docs[0].data());
-    } catch (error) { console.error("League load failed:", error); list.textContent = `Could not load leagues (${error.code || error.message}). Publish the latest Firestore Rules.`; }
+    } catch (error) {
+        logFirestoreFailure("query leagues where memberUids array-contains the signed-in UID", error);
+        list.textContent = `Could not load leagues (${error.code || error.message}).`;
+    }
 }
 
 async function createLeague() {
@@ -4731,11 +4919,13 @@ async function joinLeague() {
     if (!user || !code) { status.textContent = "Enter an invite code."; return; }
     const btn = document.getElementById("joinLeagueBtn"); btn.disabled = true; btn.textContent = "JOINING...";
     try {
-        const matches = await getDocs(query(collection(db, "leagues"), where("inviteCode", "==", code)));
+        const matches = await runFirestoreOperation("query leagues by inviteCode",
+            () => getDocs(query(collection(db, "leagues"), where("inviteCode", "==", code))));
         if (matches.empty) throw new Error("Invite code not found. Check the code and try again.");
         const leagueDoc = matches.docs[0]; const league = leagueDoc.data();
         if (league.memberUids.includes(user.uid)) throw new Error("You are already a member of this league.");
-        await updateDoc(doc(db, "leagues", leagueDoc.id), { memberUids: [...league.memberUids, user.uid] });
+        await runFirestoreOperation("add the signed-in UID to leagues/{leagueId}.memberUids",
+            () => updateDoc(doc(db, "leagues", leagueDoc.id), { memberUids: [...league.memberUids, user.uid] }));
         status.textContent = `Joined ${league.name}!`;
         document.getElementById("leagueCodeInput").value = "";
         await loadMyLeagues();
@@ -4756,7 +4946,8 @@ async function loadLeagueTasks() {
     if (!activeLeagueId || !list) return;
     list.textContent = "Loading tasks...";
     try {
-        const snap = await getDocs(collection(db, "leagues", activeLeagueId, "tasks"));
+        const snap = await runFirestoreOperation("read leagues/{leagueId}/tasks as a league member",
+            () => getDocs(collection(db, "leagues", activeLeagueId, "tasks")));
         list.replaceChildren();
         if (snap.empty) { list.textContent = "No shared tasks yet. Add the first one above."; return; }
         snap.forEach(taskDoc => {
@@ -4772,7 +4963,10 @@ async function loadLeagueTasks() {
             });
             row.append(label, count, button); list.append(row);
         });
-    } catch (error) { console.error(error); list.textContent = `Could not load league tasks (${error.code || error.message}).`; }
+    } catch (error) {
+        console.error("Could not load or render league tasks:", error);
+        list.textContent = `Could not load league tasks (${error.code || error.message}).`;
+    }
 }
 
 async function addLeagueTask() {
@@ -4904,35 +5098,73 @@ timerAddTimeBtn.addEventListener("click", addSelectedTime);
 
 
 /* RESTORE AUTH SESSION */
+function stopAuthenticatedSubscriptions() {
+    if (countdownInterval) clearInterval(countdownInterval);
+    countdownInterval = null;
+    stopTimerTicker();
+    stopPrayerReminderSystem();
+
+    [
+        studyRoomUnsubscribe,
+        studyInviteUnsubscribe,
+        activeStudyRoomUnsubscribe,
+        activeStudyRoomRemovalUnsubscribe,
+        studyRoomStatsUnsubscribe,
+        studySessionStatsUnsubscribe
+    ].forEach(unsubscribe => unsubscribe?.());
+    studyRoomUnsubscribe = null;
+    studyInviteUnsubscribe = null;
+    activeStudyRoomUnsubscribe = null;
+    activeStudyRoomRemovalUnsubscribe = null;
+    studyRoomStatsUnsubscribe = null;
+    studySessionStatsUnsubscribe = null;
+    stopStudyLeaderboardUpdates();
+    stopFriendStudyStats();
+
+    if (studyStatsDayInterval) clearInterval(studyStatsDayInterval);
+    studyStatsDayInterval = null;
+    studyStatsDayUid = null;
+    studyStatsCurrentDay = null;
+    if (studyStatsRefreshTimer) clearTimeout(studyStatsRefreshTimer);
+    studyStatsRefreshTimer = null;
+    if (studyRoomTicker) clearInterval(studyRoomTicker);
+    studyRoomTicker = null;
+
+    activeSession = null;
+    finishingSession = false;
+    startingSession = false;
+    currentProfile = null;
+    dashboardLoadedUid = null;
+    activeStudyRoomId = null;
+    activeStudyRoomData = null;
+    activeStudyRoomProfiles.clear();
+    studyRoomProfileLoads.clear();
+    studyRoomActionPending = false;
+    endingStudyRoom = false;
+    const liveRoomPanel = document.getElementById("studyRoomLivePanel");
+    if (liveRoomPanel) liveRoomPanel.hidden = true;
+    closeFriendProfileModal();
+}
+
 onAuthStateChanged(auth, async user => {
     if (authFlowInProgress) return;
+    const nextUid = user?.uid || null;
+    if (activeAuthUid !== nextUid) {
+        stopAuthenticatedSubscriptions();
+        activeAuthUid = nextUid;
+        if (user) {
+            dashboard.hidden = true;
+            mobileNav.hidden = true;
+            authContainer.hidden = false;
+        }
+    }
     if (user) {
+        if (dashboardLoadedUid === user.uid) return;
         await loadDashboard(user);
     } else {
         dashboard.hidden = true;
         mobileNav.hidden = true;
         authContainer.hidden = false;
-        if (countdownInterval) {
-            clearInterval(countdownInterval);
-            countdownInterval = null;
-        }
-        stopTimerTicker();
-        stopPrayerReminderSystem();
-        activeSession = null;
-        currentProfile = null;
-        if (studyRoomUnsubscribe) studyRoomUnsubscribe(); if (studyInviteUnsubscribe) studyInviteUnsubscribe(); if (activeStudyRoomUnsubscribe) activeStudyRoomUnsubscribe(); if (activeStudyRoomRemovalUnsubscribe) activeStudyRoomRemovalUnsubscribe(); if (studyRoomStatsUnsubscribe) studyRoomStatsUnsubscribe(); if (studySessionStatsUnsubscribe) studySessionStatsUnsubscribe();
-        studyRoomUnsubscribe = studyInviteUnsubscribe = activeStudyRoomUnsubscribe = studyRoomStatsUnsubscribe = studySessionStatsUnsubscribe = null; activeStudyRoomId = null; activeStudyRoomData = null;
-        activeStudyRoomRemovalUnsubscribe = null;
-        stopStudyLeaderboardUpdates();
-        stopFriendStudyStats();
-        if (studyStatsDayInterval) clearInterval(studyStatsDayInterval);
-        studyStatsDayInterval = null;
-        studyStatsDayUid = null;
-        studyStatsCurrentDay = null;
-        if (studyStatsRefreshTimer) clearTimeout(studyStatsRefreshTimer);
-        studyStatsRefreshTimer = null;
-        if (studyRoomTicker) clearInterval(studyRoomTicker); studyRoomTicker = null;
-        studyRoomActionPending = false; endingStudyRoom = false;
     }
 });
 

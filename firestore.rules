@@ -146,8 +146,7 @@ service cloud.firestore {
         && request.resource.data.recipientUid is string && request.resource.data.recipientUid != request.auth.uid
         && request.resource.data.senderUsername is string && request.resource.data.recipientUsername is string
         && request.resource.data.senderAvatarUrl is string && request.resource.data.recipientAvatarUrl is string
-        && request.resource.data.status == 'pending' && request.resource.data.createdAt == request.time
-        && get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.ownerUid == request.auth.uid;
+        && request.resource.data.status == 'pending' && request.resource.data.createdAt == request.time;
       allow read: if signedIn() && (resource.data.senderUid == request.auth.uid || resource.data.recipientUid == request.auth.uid);
       allow update: if signedIn()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','respondedAt'])
