@@ -4194,7 +4194,7 @@ function renderStudyRoom(){
         const card = document.createElement("div"); card.className = "study-participant-card";
         const open = document.createElement("button"); open.type = "button"; open.className = "study-participant-open";
         const avatar = document.createElement("span"); avatar.className = "study-participant-avatar";
-        const photo = profile.photoURL || profile.photoUrl || profile.avatarUrl || profile.profilePhoto || profile.photo || "";
+        const photo = profile.avatarUrl || "";
         if (photo) { const img = document.createElement("img"); img.src = photo; img.alt = ""; img.loading = "lazy"; img.onerror = () => { avatar.textContent = (name[0] || "M").toUpperCase(); }; avatar.append(img); }
         else avatar.textContent = (name[0] || "M").toUpperCase();
         const identity = document.createElement("span"); identity.className = "study-participant-identity";
@@ -4216,7 +4216,7 @@ function openStudyMemberProfile(memberUid) {
     const room=activeStudyRoomData;if(!room||!room.memberUids?.includes(memberUid))return;
     const profile=activeStudyRoomProfiles.get(memberUid)||{};
     const name=memberUid===room.ownerUid?room.ownerUsername||profile.username||"Host":memberUid===auth.currentUser?.uid?currentProfile?.username||"You":profile.username||"Member";
-    const photo=profile.photoURL||profile.photoUrl||profile.avatarUrl||profile.profilePhoto||profile.photo||"";
+    const photo=profile.avatarUrl||"";
     const modal=document.getElementById("studyMemberProfileModal"),avatar=document.getElementById("studyMemberModalAvatar");avatar.replaceChildren();
     if(photo){const img=document.createElement("img");img.src=photo;img.alt="";avatar.append(img);}else avatar.textContent=(name[0]||"M").toUpperCase();
     document.getElementById("studyMemberModalName").textContent=name;
@@ -4225,13 +4225,19 @@ function openStudyMemberProfile(memberUid) {
     state.textContent=room.status==="waiting"?(ready?"READY":"NOT READY"):(room.pausedAt?"SESSION PAUSED":"IN SESSION");
     state.className="study-member-modal-status "+(ready?"ready":"not-ready");
     const messageButton=document.getElementById("studyMemberMessageBtn");messageButton.hidden=memberUid===auth.currentUser?.uid||!["waiting","active"].includes(room.status);
-    messageButton.onclick=()=>openStudyPrivateChat(memberUid,name);document.getElementById("studyPrivateChatPanel").hidden=true;modal.hidden=false;
+    messageButton.onclick=()=>{modal.hidden=true;openStudyPrivateChat(memberUid,name);};document.getElementById("studyPrivateChatPanel").hidden=true;modal.hidden=false;
 }
-function openStudyPrivateChat(targetUid,targetName) {
+async function openStudyPrivateChat(targetUid,targetName) {
     const room=activeStudyRoomData,uid=auth.currentUser?.uid;if(!room||!uid||!room.memberUids?.includes(targetUid)||targetUid===uid)return;
     if(studyPrivateChatUnsubscribe)studyPrivateChatUnsubscribe();studyPrivateChatTargetUid=targetUid;
     document.getElementById("studyPrivateChatPanel").hidden=false;document.getElementById("studyPrivateChatTitle").textContent="Chat with "+targetName;
     const chatId=[uid,targetUid].sort().join("_"),messages=document.getElementById("studyPrivateChatMessages");messages.replaceChildren();
+    try {
+        const chatRef=doc(db,"studyRooms",room.id,"privateChats",chatId);
+        const chatSnapshot=await getDoc(chatRef);
+        if(!chatSnapshot.exists()) await setDoc(chatRef,{memberUids:[uid,targetUid].sort(),updatedAt:serverTimestamp()});
+        if(activeStudyRoomId!==room.id||studyPrivateChatTargetUid!==targetUid)return;
+    } catch(error) { console.error("Could not initialize private chat:",error); messages.textContent="Private chat could not be opened."; return; }
     studyPrivateChatUnsubscribe=onSnapshot(query(collection(db,"studyRooms",room.id,"privateChats",chatId,"messages"),orderBy("createdAt","asc")),snap=>{
         if(activeStudyRoomId!==room.id||studyPrivateChatTargetUid!==targetUid)return;messages.replaceChildren();
         if(snap.empty){const p=document.createElement("p");p.className="study-chat-empty";p.textContent="Start a private conversation.";messages.append(p);return;}
