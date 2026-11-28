@@ -32,12 +32,17 @@ service cloud.firestore {
       let startedMillis = room.startedAt.toMillis();
       let requestedEndMillis = endAt.toMillis();
       let targetMillis = room.mode == 'countdown'
-        ? startedMillis + room.durationSeconds * 1000
+        ? room.targetEndAt is timestamp ? room.targetEndAt.toMillis() : startedMillis + room.durationSeconds * 1000
         : room.mode == 'until' && room.targetEndAt is timestamp
           ? room.targetEndAt.toMillis()
           : requestedEndMillis;
-      let effectiveEndMillis = targetMillis < requestedEndMillis ? targetMillis : requestedEndMillis;
-      let seconds = math.floor((effectiveEndMillis - startedMillis) / 1000);
+      let boundedEndMillis = targetMillis < requestedEndMillis ? targetMillis : requestedEndMillis;
+      let pausedAt = room.get('pausedAt', null);
+      let effectiveEndMillis = pausedAt is timestamp && pausedAt.toMillis() < boundedEndMillis
+        ? pausedAt.toMillis()
+        : boundedEndMillis;
+      let pausedSeconds = room.get('pausedSeconds', 0);
+      let seconds = math.floor((effectiveEndMillis - startedMillis) / 1000) - pausedSeconds;
       return seconds < 0 ? 0 : seconds;
     }
     function validParticipantEvent(action, participantUid) {
@@ -223,11 +228,14 @@ service cloud.firestore {
 
     match /studyRooms/{roomId} {
       allow create: if signedIn()
-        && request.resource.data.keys().hasOnly(['name','ownerUid','ownerUsername','memberUids','mode','durationSeconds','targetEndAt','status','createdAt','startedAt','endedAt'])
+        && request.resource.data.keys().hasOnly(['name','ownerUid','ownerUsername','memberUids','readyUids','pausedAt','pausedSeconds','mode','durationSeconds','targetEndAt','status','createdAt','startedAt','endedAt'])
         && request.resource.data.name is string && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 48
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUsername is string && request.resource.data.ownerUsername.size() <= 20
         && request.resource.data.memberUids == [request.auth.uid]
+        && request.resource.data.readyUids == []
+        && request.resource.data.pausedAt == null
+        && request.resource.data.pausedSeconds == 0
         && request.resource.data.mode in ['stopwatch','countdown','until']
         && request.resource.data.durationSeconds is int
         && ((request.resource.data.mode == 'countdown' && request.resource.data.durationSeconds >= 60 && request.resource.data.durationSeconds <= 86400)
@@ -240,11 +248,14 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time
         && request.resource.data.startedAt == null && request.resource.data.endedAt == null;
       allow read: if signedIn() && (request.auth.uid in resource.data.memberUids
-        || (resource.data.ownerUid == request.auth.uid && resource.data.status == 'ending'));
+        || (resource.data.ownerUid == request.auth.uid && resource.data.status == 'ending')
+        || (exists(studyRoomInvitePath(roomId, request.auth.uid))
+          && get(studyRoomInvitePath(roomId, request.auth.uid)).data.status == 'pending'
+          && get(studyRoomInvitePath(roomId, request.auth.uid)).data.roomId == roomId));
       allow update: if signedIn() && (
         (
-          resource.data.status == 'waiting'
-          && request.resource.data.status == 'waiting'
+          resource.data.status in ['waiting','active']
+          && request.resource.data.status == resource.data.status
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids'])
           && resource.data.ownerUid == request.resource.data.ownerUid
           && request.resource.data.memberUids is list
@@ -362,6 +373,61 @@ service cloud.firestore {
           && !(request.resource.data.lastParticipantEvent.uid in resource.data.get('kickedUids', []))
         )
       );
+
+      match /privateChats/{chatId} {
+        function validPrivateChatMembers(data) {
+          return data.memberUids is list && data.memberUids.size() == 2
+            && data.memberUids[0] is string && data.memberUids[1] is string
+            && data.memberUids[0] != data.memberUids[1]
+            && data.memberUids.hasAll([request.auth.uid])
+            && data.memberUids[0] in get(/databases/$(database)/documents/studyRooms/$(roomId)).data.memberUids
+            && data.memberUids[1] in get(/databases/$(database)/documents/studyRooms/$(roomId)).data.memberUids
+            && (chatId == data.memberUids[0] + '_' + data.memberUids[1]
+              || chatId == data.memberUids[1] + '_' + data.memberUids[0]);
+        }
+        allow read: if signedIn() && resource.data.memberUids is list && request.auth.uid in resource.data.memberUids;
+        allow create: if signedIn() && request.resource.data.keys().hasOnly(['memberUids','updatedAt'])
+          && validPrivateChatMembers(request.resource.data) && request.resource.data.updatedAt == request.time;
+        allow update: if signedIn() && resource.data.memberUids is list
+          && request.auth.uid in resource.data.memberUids
+          && request.resource.data.memberUids == resource.data.memberUids
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt'])
+          && request.resource.data.updatedAt == request.time;
+        allow delete: if false;
+        match /messages/{messageId} {
+          function chatMembers() {
+            return signedIn() && request.auth.uid in get(/databases/$(database)/documents/studyRooms/$(roomId)/privateChats/$(chatId)).data.memberUids;
+          }
+          allow read: if chatMembers();
+          allow create: if chatMembers()
+            && request.resource.data.keys().hasOnly(['senderUid','recipientUid','senderUsername','text','createdAt'])
+            && request.resource.data.senderUid == request.auth.uid
+            && request.resource.data.recipientUid in get(/databases/$(database)/documents/studyRooms/$(roomId)/privateChats/$(chatId)).data.memberUids
+            && request.resource.data.senderUsername is string && request.resource.data.senderUsername.size() <= 20
+            && request.resource.data.text is string && request.resource.data.text.size() >= 1 && request.resource.data.text.size() <= 1000
+            && request.resource.data.createdAt == request.time;
+          allow update, delete: if false;
+        }
+      }
+
+      match /messages/{messageId} {
+        function roomMember() {
+          return signedIn()
+            && request.auth.uid in get(/databases/$(database)/documents/studyRooms/$(roomId)).data.memberUids;
+        }
+        allow read: if roomMember();
+        allow create: if roomMember()
+          && request.resource.data.keys().hasOnly(['senderUid','senderUsername','text','createdAt'])
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.senderUsername is string
+          && request.resource.data.senderUsername.size() <= 20
+          && request.resource.data.text is string
+          && request.resource.data.text.size() >= 1
+          && request.resource.data.text.size() <= 1000
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+
       allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid
         && resource.data.status in ['completed','cancelled'];
     }
@@ -462,7 +528,8 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time
         && inviteId == request.resource.data.roomId + '_' + request.resource.data.recipientUid
         && get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.ownerUid == request.auth.uid
-        && get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.status == 'waiting';
+        && get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.status in ['waiting','active']
+        && request.auth.uid in get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.memberUids;
       allow read: if signedIn() && (resource.data.senderUid == request.auth.uid || resource.data.recipientUid == request.auth.uid);
       allow update: if signedIn() && resource.data.recipientUid == request.auth.uid
         && resource.data.status == 'pending'
@@ -471,7 +538,7 @@ service cloud.firestore {
         && request.resource.data.respondedAt == request.time
         && (request.resource.data.status == 'declined'
           || (
-            getAfter(/databases/$(database)/documents/studyRooms/$(resource.data.roomId)).data.status == 'waiting'
+            getAfter(/databases/$(database)/documents/studyRooms/$(resource.data.roomId)).data.status in ['waiting','active']
             && request.auth.uid in getAfter(/databases/$(database)/documents/studyRooms/$(resource.data.roomId)).data.memberUids
             && !(request.auth.uid in getAfter(/databases/$(database)/documents/studyRooms/$(resource.data.roomId)).data.get('kickedUids', []))
           ));

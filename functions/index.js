@@ -61,21 +61,24 @@ function getRoomElapsedSeconds(room, nowMillis) {
   const startedAt = timestampMillis(room.startedAt);
   if (!startedAt) throw new HttpsError('failed-precondition', 'The session start time is not available yet.');
   let endedAt = nowMillis;
+  if (room.pausedAt) endedAt = Math.min(endedAt, timestampMillis(room.pausedAt));
   if (room.mode === 'countdown') {
-    endedAt = Math.min(endedAt, startedAt + Math.max(0, Number(room.durationSeconds) || 0) * 1000);
+    const configuredEnd = timestampMillis(room.targetEndAt) || startedAt + Math.max(0, Number(room.durationSeconds) || 0) * 1000;
+    endedAt = Math.min(endedAt, configuredEnd);
   } else if (room.mode === 'until') {
     const targetEndAt = timestampMillis(room.targetEndAt);
     if (!targetEndAt) throw new HttpsError('failed-precondition', 'The session end time is invalid.');
     endedAt = Math.min(endedAt, targetEndAt);
   }
-  return Math.max(0, Math.floor((endedAt - startedAt) / 1000));
+  const pausedSeconds = Math.max(0, Number(room.pausedSeconds) || 0);
+  return Math.max(0, Math.floor((endedAt - startedAt) / 1000) - pausedSeconds);
 }
 
 exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in to manage this Study Session.');
 
   const { action, roomId, targetUid, inviteId } = request.data || {};
-  if (!['start', 'end', 'join', 'leave', 'kick'].includes(action) ||
+  if (!['ready', 'start', 'pause', 'resume', 'end', 'join', 'leave', 'kick'].includes(action) ||
       typeof roomId !== 'string' || !roomId || roomId.length > 150 || roomId.includes('/')) {
     throw new HttpsError('invalid-argument', 'The Study Session action is invalid.');
   }
@@ -110,9 +113,24 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
       }
       if (members.includes(uid)) throw new HttpsError('already-exists', 'You are already in this session.');
 
-      transaction.update(roomRef, { memberUids: [...members, uid] });
+      transaction.update(roomRef, { memberUids: [...members, uid], readyUids: (Array.isArray(room.readyUids) ? room.readyUids : []).filter(memberUid => memberUid !== uid) });
       transaction.update(inviteRef, { status: 'accepted', respondedAt: now });
       return { status: 'waiting' };
+    }
+
+    if (action === 'ready') {
+      if (room.status !== 'waiting' || !members.includes(uid)) {
+        throw new HttpsError('failed-precondition', 'Readiness can only be changed by a member of a waiting session.');
+      }
+      if (typeof request.data.ready !== 'boolean') {
+        throw new HttpsError('invalid-argument', 'A readiness value is required.');
+      }
+      const readyUids = Array.isArray(room.readyUids) ? room.readyUids : [];
+      const nextReadyUids = request.data.ready
+        ? [...new Set([...readyUids, uid])]
+        : readyUids.filter(memberUid => memberUid !== uid);
+      transaction.update(roomRef, { readyUids: nextReadyUids });
+      return { readyUids: nextReadyUids };
     }
 
     if (action === 'start') {
@@ -120,13 +138,17 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
       if (room.status !== 'waiting' || !members.includes(uid)) {
         throw new HttpsError('failed-precondition', 'This session is not waiting for a start.');
       }
-      let targetEndAt = '';
+      const readyUids = Array.isArray(room.readyUids) ? room.readyUids : [];
+      if (!members.length || !members.every(memberUid => readyUids.includes(memberUid))) {
+        throw new HttpsError('failed-precondition', 'Everyone must be READY before the host starts the session.');
+      }
+      let targetEndAt = room.targetEndAt || null;
       if (room.mode === 'countdown') {
         const durationSeconds = Number(room.durationSeconds);
         if (!Number.isInteger(durationSeconds) || durationSeconds < 60 || durationSeconds > 86400) {
           throw new HttpsError('failed-precondition', 'The countdown duration is invalid.');
         }
-        targetEndAt = new Date(nowMillis + durationSeconds * 1000).toISOString();
+        targetEndAt = Timestamp.fromMillis(nowMillis + durationSeconds * 1000);
       } else if (room.mode === 'until') {
         const endMillis = timestampMillis(room.targetEndAt);
         if (!endMillis || endMillis <= nowMillis) {
@@ -136,6 +158,28 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
         throw new HttpsError('failed-precondition', 'The session timer mode is invalid.');
       }
       transaction.update(roomRef, { status: 'active', startedAt: now, targetEndAt });
+      return { status: 'active' };
+    }
+
+    if (action === 'pause') {
+      if (room.ownerUid !== uid) throw new HttpsError('permission-denied', 'Only the host can pause this session.');
+      if (room.status !== 'active' || room.pausedAt) throw new HttpsError('failed-precondition', 'This session cannot be paused right now.');
+      transaction.update(roomRef, { pausedAt: now });
+      return { status: 'paused' };
+    }
+
+    if (action === 'resume') {
+      if (room.ownerUid !== uid) throw new HttpsError('permission-denied', 'Only the host can resume this session.');
+      if (room.status !== 'active' || !room.pausedAt) throw new HttpsError('failed-precondition', 'This session is not paused.');
+      const pausedAtMillis = timestampMillis(room.pausedAt);
+      const pauseDuration = Math.max(0, nowMillis - pausedAtMillis);
+      const updates = {
+        pausedAt: null,
+        pausedSeconds: Math.max(0, Number(room.pausedSeconds) || 0) + Math.floor(pauseDuration / 1000)
+      };
+      const targetEnd = timestampMillis(room.targetEndAt);
+      if (targetEnd) updates.targetEndAt = Timestamp.fromMillis(targetEnd + pauseDuration);
+      transaction.update(roomRef, updates);
       return { status: 'active' };
     }
 
@@ -169,6 +213,7 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
       const revision = (Number(room.participantEventRevision) || 0) + 1;
       const updates = {
         memberUids: remainingMembers,
+        readyUids: (Array.isArray(room.readyUids) ? room.readyUids : []).filter(memberUid => memberUid !== uid),
         participantEventRevision: revision,
         lastParticipantEvent: { uid, actorUid: uid, action: 'left', revision, createdAt: now }
       };
@@ -227,6 +272,7 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
       const revision = (Number(room.participantEventRevision) || 0) + 1;
       transaction.update(roomRef, {
         memberUids: remainingMembers,
+        readyUids: (Array.isArray(room.readyUids) ? room.readyUids : []).filter(memberUid => memberUid !== targetUid),
         kickedUids: [...new Set([...kickedUids, targetUid])],
         participantEventRevision: revision,
         lastParticipantEvent: { uid: targetUid, actorUid: uid, action: 'kicked', revision, createdAt: now }

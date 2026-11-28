@@ -256,8 +256,15 @@
 </section></section><section class="app-page" data-page="challenges" id="page-challenges"><section class="community-section study-room-section" id="studySessions">
 <div class="section-heading"><div><span class="section-kicker">FOCUS TOGETHER</span><h3>Study Session</h3></div><span class="community-caption">PLAN • INVITE • FOCUS</span></div>
 <p class="community-description">Create a shared study room, invite your friends, and let the host control the session timer.</p>
+<div class="study-session-filters study-session-topbar" id="studySessionFilters" role="tablist" aria-label="Study session sections">
+ <button type="button" class="study-session-filter active" data-study-filter="all">ALL <span id="studyFilterAllCount">0</span></button>
+ <button type="button" class="study-session-filter" data-study-filter="active">ACTIVE <span id="studyFilterActiveCount">0</span></button>
+ <button type="button" class="study-session-filter" data-study-filter="ended">ENDS <span id="studyFilterEndedCount">0</span></button>
+ <button type="button" class="study-session-filter" data-study-filter="invited">INVITED <span id="studyFilterInvitedCount">0</span></button>
+ <button type="button" class="study-session-filter study-session-new" data-study-filter="new"><i class="fas fa-plus"></i> NEW</button>
+</div>
 <div class="study-room-layout">
- <article class="panel study-room-create"><div class="study-room-panel-icon">✦</div><h4>Create a study room</h4><p class="panel-description">Choose how long you want to study and invite your friends.</p>
+ <article class="panel study-room-create" id="studyRoomCreatePanel" hidden><div class="study-room-panel-icon">✦</div><h4>Create a study room</h4><p class="panel-description">Choose how long you want to study and invite your friends.</p>
   <label for="studyRoomName">Session name</label><input id="studyRoomName" maxlength="48" placeholder="Example: Biology revision">
   <label for="studyRoomMode">Timer type</label><select id="studyRoomMode"><option value="stopwatch">Stopwatch — count up</option><option value="countdown">Countdown — set duration</option><option value="until">Until a specific time</option></select>
   <div id="studyCountdownFields" class="study-time-fields"><label for="studyRoomMinutes">Duration (minutes)</label><input id="studyRoomMinutes" type="number" min="1" max="1440" value="60"></div>
@@ -267,7 +274,8 @@
  </article>
  <article class="panel study-room-inbox"><div class="panel-heading"><div><span class="section-kicker">YOUR INBOX</span><h4>Study invitations</h4></div><span class="study-inbox-count" id="studyInviteCount">0</span></div><div id="studyInvitesList" class="friends-list"><p class="community-loading">Loading invitations...</p></div></article>
 </div>
-<article class="panel study-active-panel"><div class="panel-heading"><div><span class="section-kicker">LIVE COLLABORATION</span><h4>My study rooms</h4></div><span class="study-live-indicator"><i></i> LIVE SYNC</span></div><div id="myStudyRoomsList" class="study-rooms-list"><p class="community-loading">Loading your study rooms...</p></div></article>
+<article class="panel study-active-panel"><div class="panel-heading"><div><span class="section-kicker">LIVE COLLABORATION</span><h4>My study rooms</h4></div><span class="study-live-indicator"><i></i> LIVE SYNC</span></div>
+<div id="myStudyRoomsList" class="study-rooms-list"><p class="community-loading">Loading your study rooms...</p></div></article>
 
 
 
@@ -297,7 +305,10 @@
             Waiting for the host to start
         </small>
 
-        <!-- HOST CONTROLS: ONE COPY ONLY -->
+        <div class="study-member-ready-wrap">
+            <button type="button" class="community-action-btn study-ready-button" id="studyMemberReadyBtn" hidden><i class="far fa-circle"></i> MARK AS READY</button>
+        </div>
+        <!-- HOST CONTROLS -->
         <div class="study-host-controls" id="studyHostControls" hidden>
 
             <button
@@ -308,6 +319,8 @@
                 START SESSION
             </button>
 
+            <button class="mini-action fullscreen-control-btn study-pause-button" id="studyHostPauseBtn" type="button" hidden><i class="fas fa-pause"></i> PAUSE TIMER</button>
+            <button class="mini-action fullscreen-control-btn study-resume-button" id="studyHostResumeBtn" type="button" hidden><i class="fas fa-play"></i> RESUME TIMER</button>
             <button
                 class="mini-action danger-action fullscreen-control-btn"
                 id="studyHostStopBtn"
@@ -352,10 +365,41 @@
     </div>
 
     <!-- PARTICIPANTS -->
-    <div
-        class="study-room-participants"
-        id="studyLiveParticipants">
+    <div class="study-room-participants" id="studyLiveParticipants"></div>
+
+    <section class="study-room-invite-more" id="studyRoomInviteMore">
+        <div class="study-chat-section-heading"><div><span class="section-kicker">GROW YOUR STUDY GROUP</span><h4>Invite more friends</h4></div><span class="study-chat-lock-note">HOST ONLY</span></div>
+        <div class="study-add-members-row">
+            <select id="studyRoomAddFriends" multiple size="3" aria-label="Choose more friends to invite"><option disabled>Loading friends...</option></select>
+            <button type="button" class="community-action-btn" id="studyRoomAddFriendsBtn">SEND INVITES</button>
+        </div>
+        <p class="community-note" id="studyRoomAddFriendsStatus" aria-live="polite"></p>
+    </section>
+
+    <section class="study-room-chat" id="studyRoomChat">
+        <div class="study-chat-section-heading"><div><span class="section-kicker">STAY CONNECTED</span><h4>Group chat</h4></div><span class="study-chat-online"><i></i> SESSION CHAT</span></div>
+        <div class="study-chat-messages" id="studyChatMessages" aria-live="polite"><p class="study-chat-empty">Messages will appear here.</p></div>
+        <form class="study-chat-compose" id="studyChatForm">
+            <input id="studyChatInput" type="text" maxlength="1000" autocomplete="off" placeholder="Write a message..." aria-label="Write a group message" required>
+            <button type="submit" id="studyChatSendBtn" aria-label="Send message"><i class="fas fa-paper-plane"></i></button>
+        </form>
+    </section>
+
+    <div class="study-member-modal" id="studyMemberProfileModal" hidden>
+        <div class="study-member-modal-backdrop" id="studyMemberModalBackdrop"></div>
+        <section class="study-member-modal-card" role="dialog" aria-modal="true" aria-labelledby="studyMemberModalName">
+            <button type="button" class="study-member-modal-close" id="studyMemberModalClose" aria-label="Close profile"><i class="fas fa-times"></i></button>
+            <div class="study-member-modal-avatar" id="studyMemberModalAvatar"></div>
+            <h4 id="studyMemberModalName">Member</h4><p id="studyMemberModalUsername">@member</p>
+            <span class="study-member-modal-status not-ready" id="studyMemberModalStatus">NOT READY</span>
+            <button type="button" class="community-action-btn study-member-message-btn" id="studyMemberMessageBtn">MESSAGE MEMBER</button>
+        </section>
     </div>
+    <section class="study-private-chat" id="studyPrivateChatPanel" hidden>
+        <div class="study-chat-section-heading"><button type="button" class="mini-action" id="studyPrivateChatBack"><i class="fas fa-arrow-left"></i> BACK</button><h4 id="studyPrivateChatTitle">Private chat</h4></div>
+        <div class="study-chat-messages" id="studyPrivateChatMessages" aria-live="polite"></div>
+        <form class="study-chat-compose" id="studyPrivateChatForm"><input id="studyPrivateChatInput" type="text" maxlength="1000" autocomplete="off" placeholder="Message this member..." required><button type="submit" id="studyPrivateChatSendBtn" aria-label="Send private message"><i class="fas fa-paper-plane"></i></button></form>
+    </section>
 
 </article>
 
