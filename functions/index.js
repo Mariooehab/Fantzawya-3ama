@@ -315,3 +315,71 @@ ${JSON.stringify(safeContext)}
     throw new HttpsError('unavailable', 'تعذر الاتصال بالمساعد حاليًا. حاول مرة أخرى.');
   }
 });
+
+
+// Secure League joining: invite codes are checked only by trusted server code.
+// The client never reads inviteCode to discover a league and cannot edit memberUids.
+exports.joinLeague = onCall({ region: 'us-central1' }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in to join a Study League.');
+  }
+
+  const code = String(request.data?.inviteCode || '').trim().toUpperCase();
+  if (!/^[A-HJ-NP-Z2-9]{8}$/.test(code)) {
+    throw new HttpsError('invalid-argument', 'The invite code is invalid.');
+  }
+
+  const matches = await adminDb.collection('leagues')
+    .where('inviteCode', '==', code)
+    .limit(2)
+    .get();
+
+  if (matches.empty) {
+    throw new HttpsError('not-found', 'Invite code not found. Check the code and try again.');
+  }
+  if (matches.size !== 1) {
+    logger.error('Duplicate Study League invite code detected.');
+    throw new HttpsError('failed-precondition', 'This invite code is ambiguous. Contact the league owner.');
+  }
+
+  const leagueRef = matches.docs[0].ref;
+  const uid = request.auth.uid;
+
+  return adminDb.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(leagueRef);
+    if (!snapshot.exists) {
+      throw new HttpsError('not-found', 'This Study League no longer exists.');
+    }
+
+    const league = snapshot.data();
+    if (league.inviteCode !== code || league.deletionPending === true) {
+      throw new HttpsError('not-found', 'Invite code not found. Check the code and try again.');
+    }
+    if (!Array.isArray(league.memberUids) || typeof league.name !== 'string') {
+      throw new HttpsError('failed-precondition', 'This Study League has invalid membership data.');
+    }
+    if (league.memberUids.includes(uid)) {
+      return {
+        leagueId: leagueRef.id,
+        name: league.name,
+        ownerUid: league.ownerUid,
+        inviteCode: league.inviteCode,
+        memberUids: league.memberUids
+      };
+    }
+    if (league.memberUids.length >= 100) {
+      throw new HttpsError('resource-exhausted', 'This Study League has reached its member limit.');
+    }
+
+    const memberUids = [...league.memberUids, uid];
+    transaction.update(leagueRef, { memberUids });
+
+    return {
+      leagueId: leagueRef.id,
+      name: league.name,
+      ownerUid: league.ownerUid,
+      inviteCode: league.inviteCode,
+      memberUids
+    };
+  });
+});

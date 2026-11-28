@@ -1,0 +1,745 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function owner(userId) { return signedIn() && request.auth.uid == userId; }
+    function validReligion(value) { return value in ['muslim', 'christian']; }
+    function validPrayerSettings(value) {
+      return value is map
+        && value.keys().hasOnly(['city','country','enabled'])
+        && value.keys().hasAll(['city','country','enabled'])
+        && value.city is string && value.city.size() > 0 && value.city.size() <= 80
+        && value.country is string && value.country.size() > 0 && value.country.size() <= 80
+        && value.enabled is bool;
+    }
+    function validPrayerReminder(reminderId, reminder) {
+      return reminderId.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+        && reminder.keys().hasOnly(['title','time','enabled','updatedAt'])
+        && reminder.keys().hasAll(['title','time','enabled','updatedAt'])
+        && reminder.title is string && reminder.title.size() > 0 && reminder.title.size() <= 80
+        && reminder.time == reminderId
+        && reminder.enabled is bool
+        && reminder.updatedAt == request.time;
+    }
+    function leagueMember(leagueId) {
+      let league = get(/databases/$(database)/documents/leagues/$(leagueId)).data;
+      return signedIn()
+        && request.auth.uid in league.memberUids
+        && league.get('deletionPending', false) != true;
+    }
+    function studyRoomInvitePath(roomId, userId) {
+      let inviteId = roomId + '_' + userId;
+      return /databases/$(database)/documents/studyRoomInvites/$(inviteId);
+    }
+    function hasPendingStudyRoomInvite(roomId) {
+      let invitePath = studyRoomInvitePath(roomId, request.auth.uid);
+      return exists(invitePath)
+        && get(invitePath).data.roomId == roomId
+        && get(invitePath).data.recipientUid == request.auth.uid
+        && get(invitePath).data.status == 'pending';
+    }
+    function studyRoomElapsedSeconds(room, endAt) {
+      let startedMillis = room.startedAt.toMillis();
+      let requestedEndMillis = endAt.toMillis();
+      let effectiveEndMillis = room.get('isPaused', false) == true
+        ? room.pausedAt.toMillis()
+        : requestedEndMillis;
+      let pausedSeconds = room.get('pausedSeconds', 0);
+      let elapsedSeconds = math.floor((effectiveEndMillis - startedMillis) / 1000) - pausedSeconds;
+      let targetSeconds = room.mode == 'countdown'
+        ? room.durationSeconds
+        : room.mode == 'until' && room.targetEndAt is timestamp
+          ? math.floor((room.targetEndAt.toMillis() - startedMillis) / 1000)
+          : elapsedSeconds;
+      let seconds = elapsedSeconds < targetSeconds ? elapsedSeconds : targetSeconds;
+      return seconds < 0 ? 0 : seconds;
+    }
+    function studyRoomHasTimeRemaining(room, checkAt) {
+      return room.mode == 'stopwatch'
+        || (room.mode == 'countdown'
+          && studyRoomElapsedSeconds(room, checkAt) < room.durationSeconds)
+        || (room.mode == 'until'
+          && room.targetEndAt is timestamp
+          && studyRoomElapsedSeconds(room, checkAt)
+            < math.floor((room.targetEndAt.toMillis() - room.startedAt.toMillis()) / 1000));
+    }
+    function validReadyMemberList(members, readyUids) {
+      return members is list && readyUids is list && members.hasAll(readyUids);
+    }
+    function validReadyRemoval(uid) {
+      let oldMembers = resource.data.memberUids;
+      let oldReady = resource.data.get('readyUids', []);
+      let newMembers = request.resource.data.memberUids;
+      let newReady = request.resource.data.get('readyUids', []);
+      return oldMembers is list
+        && newMembers is list
+        && oldReady is list
+        && newReady is list
+        && oldMembers.hasAll(oldReady)
+        && validReadyMemberList(newMembers, newReady)
+        && (
+          (uid in oldReady
+            && oldReady.hasAll(newReady)
+            && newReady.size() == oldReady.size() - 1
+            && !(uid in newReady))
+          || (!(uid in oldReady) && newReady == oldReady)
+        );
+    }
+    function validParticipantEvent(action, participantUid) {
+      let event = request.resource.data.lastParticipantEvent;
+      return request.resource.data.participantEventRevision == resource.data.get('participantEventRevision', 0) + 1
+        && event is map
+        && event.keys().hasOnly(['uid','actorUid','action','revision','createdAt'])
+        && event.uid == participantUid
+        && event.actorUid == request.auth.uid
+        && event.action == action
+        && event.revision == request.resource.data.participantEventRevision
+        && event.createdAt == request.time;
+    }
+    function validClosedRoomMemberRemoval() {
+      let oldMembers = resource.data.memberUids;
+      let newMembers = request.resource.data.memberUids;
+      return oldMembers is list
+        && newMembers is list
+        && oldMembers.hasAll(newMembers)
+        && (
+          (request.auth.uid in oldMembers
+            && newMembers.size() == oldMembers.size() - 1
+            && !(request.auth.uid in newMembers))
+          || (!(request.auth.uid in oldMembers)
+            && newMembers.size() == oldMembers.size())
+        );
+    }
+    function validClosedRoomEventCleanup() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastParticipantEvent'])
+        || (resource.data.get('lastParticipantEvent', null) is map
+          && (resource.data.lastParticipantEvent.uid == request.auth.uid
+            || resource.data.lastParticipantEvent.actorUid == request.auth.uid)
+          && request.resource.data.lastParticipantEvent == null);
+    }
+
+    match /users/{userId} {
+      allow create: if owner(userId)
+        && request.resource.data.keys().hasOnly(['username','email','createdAt','xp','streak','status','avatarUrl','coverUrl','studyTimeZone','ownerSuggestionSeen','ownerSuggestionSeenAt','religion','prayerSettings'])
+        && request.resource.data.username is string
+        && request.resource.data.username.size() >= 3
+        && request.resource.data.username.size() <= 20
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.xp is int && request.resource.data.xp == 0
+        && request.resource.data.streak is int && request.resource.data.streak == 0
+        && 'religion' in request.resource.data
+        && validReligion(request.resource.data.religion)
+        && (!('avatarUrl' in request.resource.data) || request.resource.data.avatarUrl is string)
+        && (!('coverUrl' in request.resource.data) || (request.resource.data.coverUrl is string && request.resource.data.coverUrl.size() <= 2000))
+        && (!('studyTimeZone' in request.resource.data) || (request.resource.data.studyTimeZone is string && request.resource.data.studyTimeZone.size() <= 64))
+        && (!('prayerSettings' in request.resource.data) || validPrayerSettings(request.resource.data.prayerSettings));
+      allow read: if owner(userId);
+      allow update: if owner(userId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['username','avatarUrl','coverUrl','email','studyTimeZone','ownerSuggestionSeen','ownerSuggestionSeenAt','religion','prayerSettings'])
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['username']) || (request.resource.data.username is string && request.resource.data.username.size() >= 3 && request.resource.data.username.size() <= 20))
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['avatarUrl']) || (request.resource.data.avatarUrl is string && request.resource.data.avatarUrl.size() <= 2000))
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['coverUrl']) || (request.resource.data.coverUrl is string && request.resource.data.coverUrl.size() <= 2000))
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['email']) || request.resource.data.email == request.auth.token.email)
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['studyTimeZone']) || (request.resource.data.studyTimeZone is string && request.resource.data.studyTimeZone.size() <= 64))
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerSuggestionSeen']) || request.resource.data.ownerSuggestionSeen is bool)
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerSuggestionSeenAt']) || request.resource.data.ownerSuggestionSeenAt == request.time)
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['religion']) || validReligion(request.resource.data.religion))
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['prayerSettings']) || validPrayerSettings(request.resource.data.prayerSettings));
+      allow delete: if owner(userId);
+
+      match /prayerReminders/{reminderId} {
+        allow read: if owner(userId);
+        allow create: if owner(userId) && validPrayerReminder(reminderId, request.resource.data);
+        allow update: if owner(userId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title','time','enabled','updatedAt'])
+          && validPrayerReminder(reminderId, request.resource.data);
+        allow delete: if owner(userId);
+      }
+
+      match /friendSettings/{friendUid} {
+        allow read: if owner(userId);
+        allow create, update: if owner(userId) && friendUid != userId
+          && request.resource.data.keys().hasOnly(['favorite','updatedAt'])
+          && request.resource.data.favorite is bool
+          && request.resource.data.updatedAt == request.time;
+        allow delete: if owner(userId);
+      }
+      match /challenges/{challengeId} {
+        allow read: if owner(userId);
+        allow create: if owner(userId)
+          && request.resource.data.keys().hasOnly(['challengeId','title','joinedAt'])
+          && request.resource.data.challengeId == challengeId
+          && request.resource.data.title is string
+          && request.resource.data.joinedAt == request.time;
+        allow update: if false;
+        allow delete: if owner(userId);
+      }
+      match /todos/{todoId} {
+        allow read: if owner(userId);
+        allow create: if owner(userId)
+          && request.resource.data.keys().hasOnly(['title','note','dueAt','completed','createdAt','updatedAt'])
+          && request.resource.data.title is string && request.resource.data.title.size() >= 1 && request.resource.data.title.size() <= 100
+          && request.resource.data.note is string && request.resource.data.note.size() <= 1000
+          && request.resource.data.dueAt is string
+          && request.resource.data.completed == false
+          && request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
+        allow update: if owner(userId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['completed','updatedAt'])
+          && request.resource.data.completed is bool && request.resource.data.updatedAt == request.time;
+        allow delete: if owner(userId);
+      }
+    }
+
+    match /publicProfiles/{userId} {
+      allow read: if signedIn();
+      allow create, update: if owner(userId)
+        && request.resource.data.keys().hasOnly(['uid','username','usernameLower','avatarUrl','coverUrl','studyTimeZone','isOwner','updatedAt'])
+        && request.resource.data.keys().hasAll(['uid','username','usernameLower','avatarUrl','coverUrl','updatedAt'])
+        && request.resource.data.uid == userId
+        && request.resource.data.username is string && request.resource.data.username.size() >= 3 && request.resource.data.username.size() <= 20
+        && request.resource.data.usernameLower is string
+        && request.resource.data.avatarUrl is string && request.resource.data.avatarUrl.size() <= 2000
+        && (!('studyTimeZone' in request.resource.data) || (request.resource.data.studyTimeZone is string && request.resource.data.studyTimeZone.size() <= 64))
+        && (!('isOwner' in request.resource.data) || request.resource.data.isOwner is bool)
+        && request.resource.data.coverUrl is string && request.resource.data.coverUrl.size() <= 2000
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if owner(userId);
+    }
+
+    match /friendRequests/{requestId} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['senderUid','senderUsername','senderAvatarUrl','recipientUid','recipientUsername','recipientAvatarUrl','status','createdAt','roomId'])
+        && request.resource.data.keys().hasAll(['senderUid','senderUsername','senderAvatarUrl','recipientUid','recipientUsername','recipientAvatarUrl','status','createdAt'])
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.recipientUid is string && request.resource.data.recipientUid != request.auth.uid
+        && request.resource.data.senderUsername is string && request.resource.data.recipientUsername is string
+        && request.resource.data.senderAvatarUrl is string && request.resource.data.recipientAvatarUrl is string
+        && request.resource.data.status == 'pending' && request.resource.data.createdAt == request.time
+        && (!('roomId' in request.resource.data)
+          || (request.resource.data.roomId is string
+            && request.resource.data.roomId.size() > 0
+            && get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.ownerUid == request.auth.uid));
+      allow read: if signedIn() && (resource.data.senderUid == request.auth.uid || resource.data.recipientUid == request.auth.uid);
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','respondedAt'])
+        && request.resource.data.respondedAt == request.time
+        && ((resource.data.recipientUid == request.auth.uid && resource.data.status == 'pending'
+             && request.resource.data.status in ['accepted','rejected'])
+          || ((resource.data.senderUid == request.auth.uid || resource.data.recipientUid == request.auth.uid)
+             && resource.data.status == 'accepted' && request.resource.data.status == 'removed'));
+      allow delete: if signedIn()
+        && (resource.data.senderUid == request.auth.uid || resource.data.recipientUid == request.auth.uid);
+    }
+
+    match /studySessions/{sessionId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll(['uid','username','mode','plannedSeconds','startedAt','status','pausedSeconds','durationSeconds'])
+        && request.resource.data.keys().hasOnly(['uid','username','mode','plannedSeconds','startedAt','status','pausedSeconds','durationSeconds'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.username is string && request.resource.data.username.size() >= 3 && request.resource.data.username.size() <= 20
+        && request.resource.data.mode in ['countdown','stopwatch']
+        && request.resource.data.plannedSeconds is int && request.resource.data.plannedSeconds >= 0 && request.resource.data.plannedSeconds <= 86400
+        && ((request.resource.data.mode == 'countdown' && request.resource.data.plannedSeconds >= 1) || (request.resource.data.mode == 'stopwatch' && request.resource.data.plannedSeconds == 0))
+        && request.resource.data.startedAt == request.time && request.resource.data.status == 'active'
+        && request.resource.data.pausedSeconds == 0 && request.resource.data.durationSeconds == 0;
+      allow update: if signedIn() && resource.data.uid == request.auth.uid && resource.data.status == 'active'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['endedAt','status','durationSeconds','pausedSeconds','plannedSeconds'])
+        && request.resource.data.keys().hasAll(['endedAt','status','durationSeconds','pausedSeconds','plannedSeconds'])
+        && request.resource.data.endedAt == request.time && request.resource.data.status == 'completed'
+        && request.resource.data.durationSeconds is int && request.resource.data.durationSeconds >= 1 && request.resource.data.durationSeconds <= 604800
+        && request.resource.data.pausedSeconds is int && request.resource.data.pausedSeconds >= 0 && request.resource.data.pausedSeconds <= 604800
+        && request.resource.data.pausedSeconds <= math.floor((request.time.toMillis() - resource.data.startedAt.toMillis()) / 1000)
+        && request.resource.data.durationSeconds + request.resource.data.pausedSeconds <= math.floor((request.time.toMillis() - resource.data.startedAt.toMillis()) / 1000)
+        && request.resource.data.plannedSeconds is int && request.resource.data.plannedSeconds >= 0 && request.resource.data.plannedSeconds <= 86400
+        && ((request.resource.data.mode == 'countdown' && request.resource.data.plannedSeconds >= 1) || (request.resource.data.mode == 'stopwatch' && request.resource.data.plannedSeconds == 0))
+        && request.time > resource.data.startedAt;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    match /leagues/{leagueId} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['name','ownerUid','inviteCode','memberUids','createdAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() >= 3 && request.resource.data.name.size() <= 32
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.inviteCode is string && request.resource.data.inviteCode.size() == 8
+        && request.resource.data.memberUids is list
+        && request.resource.data.memberUids.size() == 1
+        && request.auth.uid in request.resource.data.memberUids
+        && request.resource.data.createdAt == request.time;
+      allow read: if signedIn();
+      allow update: if signedIn()
+        && (
+          (
+            resource.data.ownerUid is string
+            && resource.data.get('deletionPending', false) != true
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids'])
+            && request.resource.data.memberUids is list
+            && request.resource.data.memberUids.hasAll(resource.data.memberUids)
+            && request.resource.data.memberUids.hasAll([request.auth.uid])
+            && request.resource.data.memberUids.size() == resource.data.memberUids.size() + 1
+          )
+          || (
+            resource.data.ownerUid == request.auth.uid
+            && resource.data.memberUids is list
+            && resource.data.memberUids.size() == 1
+            && resource.data.memberUids[0] == request.auth.uid
+            && request.resource.data.ownerUid == resource.data.ownerUid
+            && request.resource.data.memberUids == resource.data.memberUids
+            && request.resource.data.deletionPending == true
+            && resource.data.get('deletionPending', false) != true
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletionPending'])
+          )
+          || (
+            request.auth.uid in resource.data.memberUids
+            && resource.data.get('deletionPending', false) != true
+            && request.resource.data.memberUids is list
+            && resource.data.memberUids.hasAll(request.resource.data.memberUids)
+            && request.resource.data.memberUids.size() == resource.data.memberUids.size() - 1
+            && !(request.auth.uid in request.resource.data.memberUids)
+            && (
+              (
+                resource.data.ownerUid != request.auth.uid
+                && request.resource.data.ownerUid == resource.data.ownerUid
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids'])
+              )
+              || (
+                resource.data.ownerUid == request.auth.uid
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids','ownerUid'])
+                && (
+                  (request.resource.data.memberUids.size() > 0
+                    && request.resource.data.ownerUid in request.resource.data.memberUids
+                    && request.resource.data.ownerUid != request.auth.uid)
+                  || (request.resource.data.memberUids.size() == 0
+                    && request.resource.data.ownerUid == null)
+                )
+              )
+            )
+          )
+        );
+      allow delete: if signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && resource.data.get('deletionPending', false) == true
+        && resource.data.memberUids is list
+        && resource.data.memberUids.size() == 1
+        && resource.data.memberUids[0] == request.auth.uid;
+
+      match /tasks/{taskId} {
+        allow read: if leagueMember(leagueId)
+          || (signedIn()
+            && get(/databases/$(database)/documents/leagues/$(leagueId)).data.ownerUid == request.auth.uid
+            && get(/databases/$(database)/documents/leagues/$(leagueId)).data.get('deletionPending', false) == true);
+        allow create: if leagueMember(leagueId)
+          && request.resource.data.keys().hasOnly(['title','createdBy','createdAt','completedBy'])
+          && request.resource.data.title is string && request.resource.data.title.size() >= 1 && request.resource.data.title.size() <= 100
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.completedBy == [];
+        allow update: if leagueMember(leagueId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['completedBy','createdBy'])
+          && (
+            request.resource.data.completedBy == resource.data.completedBy
+            || (
+              request.resource.data.completedBy is list
+              && request.resource.data.completedBy.hasAll(resource.data.completedBy)
+              && request.resource.data.completedBy.hasAll([request.auth.uid])
+              && request.resource.data.completedBy.size() == resource.data.completedBy.size() + 1
+            )
+            || (
+              request.resource.data.completedBy is list
+              && resource.data.completedBy.hasAll(request.resource.data.completedBy)
+              && request.auth.uid in resource.data.completedBy
+              && !(request.auth.uid in request.resource.data.completedBy)
+              && request.resource.data.completedBy.size() == resource.data.completedBy.size() - 1
+            )
+          )
+          && (
+            request.resource.data.createdBy == resource.data.createdBy
+            || (resource.data.createdBy == request.auth.uid && request.resource.data.createdBy == 'deleted')
+          );
+        allow delete: if signedIn()
+          && get(/databases/$(database)/documents/leagues/$(leagueId)).data.ownerUid == request.auth.uid
+          && get(/databases/$(database)/documents/leagues/$(leagueId)).data.get('deletionPending', false) == true
+          && get(/databases/$(database)/documents/leagues/$(leagueId)).data.memberUids is list
+          && get(/databases/$(database)/documents/leagues/$(leagueId)).data.memberUids.size() == 1
+          && get(/databases/$(database)/documents/leagues/$(leagueId)).data.memberUids[0] == request.auth.uid;
+      }
+    }
+
+    match /studyRooms/{roomId} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['name','ownerUid','ownerUsername','memberUids','readyUids','mode','durationSeconds','targetEndAt','status','createdAt','startedAt','endedAt','isPaused','pausedAt','pausedSeconds'])
+        && request.resource.data.keys().hasAll(['name','ownerUid','ownerUsername','memberUids','readyUids','mode','durationSeconds','targetEndAt','status','createdAt','startedAt','endedAt','isPaused','pausedAt','pausedSeconds'])
+        && request.resource.data.name is string && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 48
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUsername is string && request.resource.data.ownerUsername.size() <= 20
+        && request.resource.data.memberUids == [request.auth.uid]
+        && request.resource.data.readyUids == []
+        && request.resource.data.mode in ['stopwatch','countdown','until']
+        && request.resource.data.durationSeconds is int
+        && ((request.resource.data.mode == 'countdown' && request.resource.data.durationSeconds >= 60 && request.resource.data.durationSeconds <= 86400)
+          || (request.resource.data.mode != 'countdown' && request.resource.data.durationSeconds == 0))
+        && ((request.resource.data.mode == 'until' && request.resource.data.targetEndAt is timestamp
+              && request.resource.data.targetEndAt > request.time
+              && request.resource.data.targetEndAt.toMillis() <= request.time.toMillis() + 604800000)
+          || (request.resource.data.mode != 'until' && request.resource.data.targetEndAt == null))
+        && request.resource.data.status == 'waiting'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.startedAt == null && request.resource.data.endedAt == null
+        && request.resource.data.isPaused == false
+        && request.resource.data.pausedAt == null
+        && request.resource.data.pausedSeconds == 0;
+      allow read: if signedIn()
+        && (request.auth.uid in resource.data.memberUids
+          || resource.data.ownerUid == request.auth.uid
+          || (hasPendingStudyRoomInvite(roomId)
+            && (resource.data.status == 'waiting'
+              || (resource.data.status == 'active' && resource.data.get('isPaused', false) == true))));
+      allow update: if signedIn() && (
+        (
+          ((resource.data.status == 'waiting' && request.resource.data.status == 'waiting')
+            || (resource.data.status == 'active'
+              && resource.data.get('isPaused', false) == true
+              && request.resource.data.status == 'active'))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids'])
+          && resource.data.ownerUid == request.resource.data.ownerUid
+          && request.resource.data.memberUids is list
+          && request.resource.data.memberUids.size() == resource.data.memberUids.size() + 1
+          && request.resource.data.memberUids.hasAll(resource.data.memberUids)
+          && request.resource.data.get('readyUids', []) == resource.data.get('readyUids', [])
+          && validReadyMemberList(request.resource.data.memberUids, request.resource.data.get('readyUids', []))
+          && !(request.auth.uid in resource.data.memberUids)
+          && request.auth.uid in request.resource.data.memberUids
+          && !(request.auth.uid in resource.data.get('kickedUids', []))
+          && request.resource.data.memberUids.size() <= 100
+          && get(studyRoomInvitePath(roomId, request.auth.uid)).data.status == 'pending'
+          && get(studyRoomInvitePath(roomId, request.auth.uid)).data.recipientUid == request.auth.uid
+          && get(studyRoomInvitePath(roomId, request.auth.uid)).data.roomId == roomId
+          && get(studyRoomInvitePath(roomId, request.auth.uid)).data.senderUid == resource.data.ownerUid
+          && getAfter(studyRoomInvitePath(roomId, request.auth.uid)).data.status == 'accepted'
+          && getAfter(studyRoomInvitePath(roomId, request.auth.uid)).data.respondedAt == request.time
+        )
+        || (
+          resource.data.ownerUid == request.auth.uid
+          && request.auth.uid in resource.data.memberUids
+          && resource.data.status == 'waiting'
+          && request.resource.data.status == 'active'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','startedAt'])
+          && resource.data.memberUids is list
+          && resource.data.get('readyUids', []) is list
+          && resource.data.memberUids.size() == resource.data.get('readyUids', []).size()
+          && resource.data.get('readyUids', []).hasAll(resource.data.memberUids)
+          && request.resource.data.startedAt == request.time
+          && ((resource.data.mode == 'until' && resource.data.targetEndAt is timestamp && resource.data.targetEndAt > request.time)
+            || resource.data.mode != 'until'
+            || resource.data.targetEndAt is string)
+        )
+        || (
+          resource.data.status == 'waiting'
+          && request.resource.data.status == 'waiting'
+          && request.auth.uid in resource.data.memberUids
+          && request.resource.data.memberUids == resource.data.memberUids
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readyUids'])
+          && resource.data.get('readyUids', []) is list
+          && request.resource.data.readyUids is list
+          && validReadyMemberList(resource.data.memberUids, resource.data.get('readyUids', []))
+          && (
+            (!(request.auth.uid in resource.data.get('readyUids', []))
+              && request.auth.uid in request.resource.data.readyUids
+              && request.resource.data.readyUids.size() == resource.data.get('readyUids', []).size() + 1
+              && request.resource.data.readyUids.hasAll(resource.data.get('readyUids', [])))
+            || (request.auth.uid in resource.data.get('readyUids', [])
+              && !(request.auth.uid in request.resource.data.readyUids)
+              && resource.data.get('readyUids', []).size() == request.resource.data.readyUids.size() + 1
+              && resource.data.get('readyUids', []).hasAll(request.resource.data.readyUids))
+          )
+          && validReadyMemberList(request.resource.data.memberUids, request.resource.data.readyUids)
+        )
+        || (
+          resource.data.ownerUid == request.auth.uid
+          && request.auth.uid in resource.data.memberUids
+          && resource.data.status == 'active'
+          && resource.data.get('isPaused', false) == false
+          && resource.data.get('pausedSeconds', 0) is int
+          && resource.data.get('pausedSeconds', 0) >= 0
+          && request.resource.data.status == 'active'
+          && request.resource.data.isPaused == true
+          && request.resource.data.pausedAt == request.time
+          && request.resource.data.get('pausedSeconds', 0) == resource.data.get('pausedSeconds', 0)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isPaused','pausedAt'])
+          && studyRoomHasTimeRemaining(resource.data, request.time)
+        )
+        || (
+          resource.data.ownerUid == request.auth.uid
+          && request.auth.uid in resource.data.memberUids
+          && resource.data.status == 'active'
+          && resource.data.get('isPaused', false) == true
+          && resource.data.pausedAt is timestamp
+          && resource.data.get('pausedSeconds', 0) is int
+          && request.resource.data.status == 'active'
+          && request.resource.data.isPaused == false
+          && request.resource.data.pausedAt == null
+          && request.resource.data.pausedSeconds is int
+          && math.abs(request.resource.data.pausedSeconds
+            - (resource.data.get('pausedSeconds', 0)
+              + math.floor((request.time.toMillis() - resource.data.pausedAt.toMillis()) / 1000))) <= 2
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isPaused','pausedAt','pausedSeconds'])
+          && studyRoomHasTimeRemaining(resource.data, request.time)
+        )
+        || (
+          resource.data.ownerUid == request.auth.uid
+          && request.auth.uid in resource.data.memberUids
+          && resource.data.status == 'active'
+          && request.resource.data.status == 'ending'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','endRequestedAt','autoEnded'])
+          && request.resource.data.endRequestedAt == request.time
+          && request.resource.data.autoEnded is bool
+        )
+        || (
+          resource.data.ownerUid == request.auth.uid
+          && resource.data.status == 'ending'
+          && request.resource.data.status == 'completed'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','endedAt','finalSeconds'])
+          && request.resource.data.endedAt == resource.data.endRequestedAt
+          && request.resource.data.finalSeconds is int
+          && request.resource.data.finalSeconds == studyRoomElapsedSeconds(resource.data, resource.data.endRequestedAt)
+        )
+        || (
+          resource.data.status in ['waiting','active']
+          && request.auth.uid in resource.data.memberUids
+          && request.resource.data.memberUids is list
+          && request.resource.data.memberUids.size() == resource.data.memberUids.size() - 1
+          && resource.data.memberUids.hasAll(request.resource.data.memberUids)
+          && !(request.auth.uid in request.resource.data.memberUids)
+          && validReadyRemoval(request.auth.uid)
+          && request.resource.data.get('kickedUids', []) == resource.data.get('kickedUids', [])
+          && validParticipantEvent('left', request.auth.uid)
+          && (
+            (
+              resource.data.ownerUid != request.auth.uid
+              && request.resource.data.ownerUid == resource.data.ownerUid
+              && request.resource.data.status == resource.data.status
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids','readyUids','participantEventRevision','lastParticipantEvent'])
+            )
+            || (
+              resource.data.ownerUid == request.auth.uid
+              && request.resource.data.memberUids.size() > 0
+              && request.resource.data.ownerUid in request.resource.data.memberUids
+              && request.resource.data.ownerUid != resource.data.ownerUid
+              && (
+                (exists(/databases/$(database)/documents/publicProfiles/$(request.resource.data.ownerUid))
+                  && request.resource.data.ownerUsername == get(/databases/$(database)/documents/publicProfiles/$(request.resource.data.ownerUid)).data.username)
+                || (!exists(/databases/$(database)/documents/publicProfiles/$(request.resource.data.ownerUid))
+                  && request.resource.data.ownerUsername == 'Member')
+              )
+              && request.resource.data.status == resource.data.status
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids','readyUids','participantEventRevision','lastParticipantEvent','ownerUid','ownerUsername'])
+            )
+            || (
+              resource.data.ownerUid == request.auth.uid
+              && request.resource.data.memberUids.size() == 0
+              && request.resource.data.ownerUid == resource.data.ownerUid
+              && resource.data.status == 'waiting'
+              && request.resource.data.status == 'cancelled'
+              && request.resource.data.endedAt == request.time
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids','readyUids','participantEventRevision','lastParticipantEvent','status','endedAt'])
+            )
+            || (
+              resource.data.ownerUid == request.auth.uid
+              && request.resource.data.memberUids.size() == 0
+              && request.resource.data.ownerUid == resource.data.ownerUid
+              && resource.data.status == 'active'
+              && request.resource.data.status == 'completed'
+              && request.resource.data.endedAt == request.time
+              && request.resource.data.finalSeconds is int
+              && math.abs(request.resource.data.finalSeconds - studyRoomElapsedSeconds(resource.data, request.time)) <= 2
+              && request.resource.data.autoEnded == false
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids','readyUids','participantEventRevision','lastParticipantEvent','status','endedAt','finalSeconds','autoEnded'])
+            )
+          )
+        )
+        || (
+          resource.data.ownerUid == request.auth.uid
+          && request.auth.uid in resource.data.memberUids
+          && resource.data.status in ['waiting','active']
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids','readyUids','kickedUids','participantEventRevision','lastParticipantEvent'])
+          && request.resource.data.memberUids is list
+          && request.resource.data.memberUids.size() == resource.data.memberUids.size() - 1
+          && resource.data.memberUids.hasAll(request.resource.data.memberUids)
+          && request.resource.data.kickedUids is list
+          && request.resource.data.kickedUids.hasAll(resource.data.get('kickedUids', []))
+          && request.resource.data.kickedUids.size() == resource.data.get('kickedUids', []).size() + 1
+          && validParticipantEvent('kicked', request.resource.data.lastParticipantEvent.uid)
+          && request.resource.data.lastParticipantEvent.uid == request.resource.data.kickedUids[resource.data.get('kickedUids', []).size()]
+          && request.resource.data.lastParticipantEvent.uid in resource.data.memberUids
+          && !(request.resource.data.lastParticipantEvent.uid in request.resource.data.memberUids)
+          && !(request.resource.data.lastParticipantEvent.uid in resource.data.get('kickedUids', []))
+          && validReadyRemoval(request.resource.data.lastParticipantEvent.uid)
+        )
+        || (
+          resource.data.status in ['completed','cancelled']
+          && request.auth.uid in resource.data.memberUids
+          && validClosedRoomMemberRemoval()
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids','readyUids','lastParticipantEvent'])
+          && validReadyRemoval(request.auth.uid)
+          && validClosedRoomEventCleanup()
+        )
+        || (
+          resource.data.status in ['completed','cancelled']
+          && resource.data.ownerUid == request.auth.uid
+          && validClosedRoomMemberRemoval()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberUids','readyUids','ownerUid','ownerUsername','lastParticipantEvent'])
+          && validReadyRemoval(request.auth.uid)
+          && validClosedRoomEventCleanup()
+          && (
+            (
+              request.resource.data.memberUids.size() > 0
+              && request.resource.data.ownerUid in request.resource.data.memberUids
+              && request.resource.data.ownerUid != request.auth.uid
+              && request.resource.data.ownerUsername is string
+              && request.resource.data.ownerUsername.size() <= 20
+              && (
+                (exists(/databases/$(database)/documents/publicProfiles/$(request.resource.data.ownerUid))
+                  && request.resource.data.ownerUsername == get(/databases/$(database)/documents/publicProfiles/$(request.resource.data.ownerUid)).data.username)
+                || (!exists(/databases/$(database)/documents/publicProfiles/$(request.resource.data.ownerUid))
+                  && request.resource.data.ownerUsername == 'Member')
+              )
+            )
+            || (
+              request.resource.data.memberUids.size() == 0
+              && request.resource.data.ownerUid == null
+              && request.resource.data.ownerUsername == 'Former member'
+            )
+          )
+        )
+      );
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid
+        && resource.data.status in ['completed','cancelled'];
+    }
+
+    match /studyRoomRemovals/{removalId} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['roomId','uid','roomName','type','createdAt'])
+        && request.resource.data.roomId is string
+        && request.resource.data.uid is string
+        && removalId == request.resource.data.roomId + '_' + request.resource.data.uid
+        && request.resource.data.type == 'kicked'
+        && request.resource.data.roomName is string
+        && request.resource.data.createdAt == request.time
+        && get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.ownerUid == request.auth.uid
+        && get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.status in ['waiting','active']
+        && request.resource.data.uid in get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.memberUids
+        && request.resource.data.uid in getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.kickedUids
+        && !(request.resource.data.uid in getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.memberUids)
+        && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.lastParticipantEvent.uid == request.resource.data.uid
+        && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.lastParticipantEvent.actorUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.lastParticipantEvent.action == 'kicked';
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    match /studyRoomCompletions/{completionId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['roomId','uid','durationSeconds','mode','startedAt','endedAt','completedAt'])
+        && request.resource.data.roomId is string
+        && request.resource.data.uid is string
+        && completionId == request.resource.data.roomId + '_' + request.resource.data.uid
+        && request.resource.data.durationSeconds is int
+        && request.resource.data.durationSeconds >= 0 && request.resource.data.durationSeconds <= 604800
+        && request.resource.data.mode in ['stopwatch','countdown','until']
+        && request.resource.data.startedAt is timestamp
+        && request.resource.data.endedAt is timestamp
+        && request.resource.data.completedAt == request.resource.data.endedAt
+        && (
+          (
+            request.resource.data.uid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.status == 'completed'
+            && request.resource.data.uid in getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.memberUids
+            && request.resource.data.durationSeconds == getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.finalSeconds
+            && request.resource.data.mode == getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.mode
+            && request.resource.data.startedAt == getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.startedAt
+            && request.resource.data.endedAt == getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.endedAt
+          )
+          || (
+            request.resource.data.uid == request.auth.uid
+            && get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.status == 'active'
+            && request.resource.data.mode == get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.mode
+            && request.resource.data.startedAt == get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.startedAt
+            && request.resource.data.endedAt == request.time
+            && math.abs(request.resource.data.durationSeconds - studyRoomElapsedSeconds(get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data, request.time)) <= 2
+            && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.lastParticipantEvent.uid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.lastParticipantEvent.action == 'left'
+            && !(request.auth.uid in getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.memberUids)
+          )
+          || (
+            get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.ownerUid == request.auth.uid
+            && get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.status == 'active'
+            && request.resource.data.mode == get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.mode
+            && request.resource.data.startedAt == get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.startedAt
+            && request.resource.data.endedAt == request.time
+            && math.abs(request.resource.data.durationSeconds - studyRoomElapsedSeconds(get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data, request.time)) <= 2
+            && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.lastParticipantEvent.uid == request.resource.data.uid
+            && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.lastParticipantEvent.actorUid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.lastParticipantEvent.action == 'kicked'
+            && request.resource.data.uid in getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.kickedUids
+            && !(request.resource.data.uid in getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.memberUids)
+          )
+          || (
+            request.resource.data.uid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.status == 'completed'
+            && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.lastParticipantEvent.uid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.lastParticipantEvent.action == 'left'
+            && request.resource.data.durationSeconds == getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.finalSeconds
+            && request.resource.data.mode == getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.mode
+            && request.resource.data.startedAt == getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.startedAt
+            && request.resource.data.endedAt == getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.endedAt
+            && !(request.auth.uid in getAfter(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.memberUids)
+          )
+        );
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    match /studyRoomInvites/{inviteId} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['roomId','roomName','mode','senderUid','senderUsername','recipientUid','status','createdAt'])
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.recipientUid is string && request.resource.data.recipientUid != request.auth.uid
+        && request.resource.data.roomId is string
+        && request.resource.data.roomName is string
+        && request.resource.data.mode in ['stopwatch','countdown','until']
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt == request.time
+        && inviteId == request.resource.data.roomId + '_' + request.resource.data.recipientUid
+        && get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.ownerUid == request.auth.uid
+        && get(/databases/$(database)/documents/studyRooms/$(request.resource.data.roomId)).data.status == 'waiting';
+      allow read: if signedIn() && (resource.data.senderUid == request.auth.uid || resource.data.recipientUid == request.auth.uid);
+      allow update: if signedIn() && resource.data.recipientUid == request.auth.uid
+        && resource.data.status == 'pending'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','respondedAt'])
+        && request.resource.data.status in ['accepted','declined']
+        && request.resource.data.respondedAt == request.time
+        && (request.resource.data.status == 'declined'
+          || (
+            (getAfter(/databases/$(database)/documents/studyRooms/$(resource.data.roomId)).data.status == 'waiting'
+              || (getAfter(/databases/$(database)/documents/studyRooms/$(resource.data.roomId)).data.status == 'active'
+                && getAfter(/databases/$(database)/documents/studyRooms/$(resource.data.roomId)).data.get('isPaused', false) == true))
+            && getAfter(/databases/$(database)/documents/studyRooms/$(resource.data.roomId)).data.ownerUid == resource.data.senderUid
+            && request.auth.uid in getAfter(/databases/$(database)/documents/studyRooms/$(resource.data.roomId)).data.memberUids
+            && !(request.auth.uid in getAfter(/databases/$(database)/documents/studyRooms/$(resource.data.roomId)).data.get('kickedUids', []))
+          ));
+      allow delete: if signedIn()
+        && (resource.data.senderUid == request.auth.uid || resource.data.recipientUid == request.auth.uid);
+    }
+
+    match /aiUsage/{userId} {
+      allow read, create, update: if false;
+      allow delete: if owner(userId);
+    }
+
+  }
+}
