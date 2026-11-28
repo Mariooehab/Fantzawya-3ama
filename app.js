@@ -4138,8 +4138,7 @@ function renderStudyRoom(){
     const members = room.memberUids || [];
     document.getElementById("studyLiveRoomTitle").textContent = room.name || "Study Session";
     document.getElementById("studyLiveRoomMembers").textContent = `${members.length} participant(s) • Hosted by ${room.ownerUsername || "Member"}`;
-    document.getElementById("studyLiveStatus").textContent = room.status === "active"
-        ? "LIVE" : room.status === "ending" ? "ENDING" : room.status === "completed" ? "COMPLETED" : room.status === "cancelled" ? "CANCELLED" : "WAITING";
+    document.getElementById("studyLiveStatus").textContent = room.status === "active" ? (room.pausedAt ? "PAUSED" : "LIVE") : room.status === "ending" ? "ENDING" : room.status === "completed" ? "COMPLETED" : room.status === "cancelled" ? "CANCELLED" : "WAITING";
     document.getElementById("studyLiveModeLabel").textContent = room.mode === "stopwatch"
         ? "STOPWATCH" : room.mode === "until" ? "UNTIL END TIME" : "COUNTDOWN";
     const invitePanel = document.getElementById("studyRoomInviteMore");
