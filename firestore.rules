@@ -223,11 +223,14 @@ service cloud.firestore {
 
     match /studyRooms/{roomId} {
       allow create: if signedIn()
-        && request.resource.data.keys().hasOnly(['name','ownerUid','ownerUsername','memberUids','mode','durationSeconds','targetEndAt','status','createdAt','startedAt','endedAt'])
+        && request.resource.data.keys().hasOnly(['name','ownerUid','ownerUsername','memberUids','readyUids','pausedAt','pausedSeconds','mode','durationSeconds','targetEndAt','status','createdAt','startedAt','endedAt'])
         && request.resource.data.name is string && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 48
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUsername is string && request.resource.data.ownerUsername.size() <= 20
         && request.resource.data.memberUids == [request.auth.uid]
+        && request.resource.data.readyUids == []
+        && request.resource.data.pausedAt == null
+        && request.resource.data.pausedSeconds == 0
         && request.resource.data.mode in ['stopwatch','countdown','until']
         && request.resource.data.durationSeconds is int
         && ((request.resource.data.mode == 'countdown' && request.resource.data.durationSeconds >= 60 && request.resource.data.durationSeconds <= 86400)
@@ -365,6 +368,34 @@ service cloud.firestore {
           && !(request.resource.data.lastParticipantEvent.uid in resource.data.get('kickedUids', []))
         )
       );
+
+      match /privateChats/{chatId}/messages/{messageId} {
+        function privateChatParticipants() {
+          return signedIn()
+            && request.resource.data.senderUid is string
+            && request.resource.data.recipientUid is string
+            && request.resource.data.senderUid != request.resource.data.recipientUid
+            && request.resource.data.senderUid in get(/databases/$(database)/documents/studyRooms/$(roomId)).data.memberUids
+            && request.resource.data.recipientUid in get(/databases/$(database)/documents/studyRooms/$(roomId)).data.memberUids
+            && request.auth.uid in [request.resource.data.senderUid, request.resource.data.recipientUid]
+            && (chatId == request.resource.data.senderUid + '_' + request.resource.data.recipientUid
+              || chatId == request.resource.data.recipientUid + '_' + request.resource.data.senderUid);
+        }
+        allow read: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/studyRooms/$(roomId)).data.memberUids
+          && resource.data.senderUid is string
+          && resource.data.recipientUid is string
+          && request.auth.uid in [resource.data.senderUid, resource.data.recipientUid];
+        allow create: if privateChatParticipants()
+          && request.resource.data.keys().hasOnly(['senderUid','recipientUid','senderUsername','text','createdAt'])
+          && request.resource.data.senderUsername is string
+          && request.resource.data.senderUsername.size() <= 20
+          && request.resource.data.text is string
+          && request.resource.data.text.size() >= 1
+          && request.resource.data.text.size() <= 1000
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
 
       match /messages/{messageId} {
         function roomMember() {
