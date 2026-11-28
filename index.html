@@ -351,11 +351,21 @@
         <button type="button" class="mini-action danger-action" id="studyDeleteRoomBtn" hidden>DELETE SESSION</button>
     </div>
 
-    <!-- PARTICIPANTS -->
-    <div
-        class="study-room-participants"
-        id="studyLiveParticipants">
-    </div>
+    <section class="study-session-members" aria-labelledby="studySessionMembersTitle">
+        <div class="study-session-members-heading">
+            <div>
+                <span class="section-kicker">LIVE PARTICIPANTS</span>
+                <h5 id="studySessionMembersTitle">SESSION MEMBERS</h5>
+            </div>
+            <span class="study-session-members-count" id="studySessionMemberCount" aria-live="polite">0 MEMBERS</span>
+        </div>
+        <div
+            class="study-room-participants"
+            id="studyLiveParticipants"
+            role="list"
+            aria-label="Session members">
+        </div>
+    </section>
 
 </article>
 

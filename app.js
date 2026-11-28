@@ -4192,21 +4192,46 @@ function renderStudyRoom(){
 
     loadStudyRoomParticipantProfiles(room);
     const participants = document.getElementById("studyLiveParticipants");
+    const memberCount = document.getElementById("studySessionMemberCount");
+    if (memberCount) memberCount.textContent = `${members.length} ${members.length === 1 ? "MEMBER" : "MEMBERS"}`;
     participants.replaceChildren();
+    if (!members.length) {
+        const empty = document.createElement("p");
+        empty.className = "study-session-members-empty";
+        empty.textContent = "No members are currently in this session.";
+        participants.append(empty);
+    }
     members.forEach(memberUid => {
         const profile = activeStudyRoomProfiles.get(memberUid) || {};
         const name = memberUid === room.ownerUid ? room.ownerUsername || profile.username || "Host" : memberUid === uid ? currentProfile?.username || "You" : profile.username || `Member ${memberUid.slice(0, 6)}`;
-        const card = document.createElement("div"); card.className = "study-participant-card";
-        const open = document.createElement("button"); open.type = "button"; open.className = "study-participant-open";
+        const card = document.createElement("article"); card.className = "study-session-member"; card.setAttribute("role", "listitem");
+        const open = document.createElement("button"); open.type = "button"; open.className = "study-session-member-profile";
+        open.setAttribute("aria-label", `View ${name}'s profile`);
         const avatar = document.createElement("span"); avatar.className = "study-participant-avatar";
         const photo = profile.avatarUrl || "";
         if (photo) { const img = document.createElement("img"); img.src = photo; img.alt = ""; img.loading = "lazy"; img.onerror = () => { avatar.textContent = (name[0] || "M").toUpperCase(); }; avatar.append(img); }
         else avatar.textContent = (name[0] || "M").toUpperCase();
-        const identity = document.createElement("span"); identity.className = "study-participant-identity";
-        const label = document.createElement("strong"); label.textContent = name + (memberUid === room.ownerUid ? " · HOST" : memberUid === uid ? " · YOU" : "");
-        const state = document.createElement("small"); const isReady = readyUids.includes(memberUid);
-        state.className = room.status === "waiting" ? (isReady ? "ready" : "not-ready") : (room.pausedAt ? "not-ready" : "ready"); state.textContent = room.status === "waiting" ? (isReady ? "READY" : "NOT READY") : (room.pausedAt ? "PAUSED" : "IN SESSION");
-        identity.append(label, state); open.append(avatar, identity); open.addEventListener("click", () => openStudyMemberProfile(memberUid)); card.append(open);
+        const identity = document.createElement("span"); identity.className = "study-session-member-identity";
+        const nameLine = document.createElement("span"); nameLine.className = "study-session-member-name-line";
+        const label = document.createElement("strong"); label.className = "study-session-member-name"; label.textContent = name;
+        nameLine.append(label);
+        if (memberUid === room.ownerUid) {
+            const hostBadge = document.createElement("span"); hostBadge.className = "study-session-host-badge"; hostBadge.textContent = "HOST";
+            nameLine.append(hostBadge);
+        }
+        if (memberUid === uid) {
+            const youBadge = document.createElement("span"); youBadge.className = "study-session-you-badge"; youBadge.textContent = "YOU";
+            nameLine.append(youBadge);
+        }
+        const state = document.createElement("small");
+        const isReady = readyUids.includes(memberUid);
+        const stateLabel = room.status === "active"
+            ? room.pausedAt ? "IN SESSION · PAUSED" : "IN SESSION"
+            : room.status === "waiting" ? (isReady ? "READY" : "NOT READY")
+            : room.status.toUpperCase();
+        state.className = `study-session-member-status ${room.status === "active" ? "is-active" : room.status === "waiting" ? (isReady ? "is-ready" : "is-not-ready") : "is-ended"}`;
+        state.textContent = stateLabel;
+        identity.append(nameLine, state); open.append(avatar, identity); open.addEventListener("click", () => openStudyMemberProfile(memberUid)); card.append(open);
         if (isHost && memberUid !== uid && ["waiting", "active"].includes(room.status)) {
             const kickButton = document.createElement("button"); kickButton.type = "button"; kickButton.className = "mini-action danger-action";
             kickButton.textContent = studyRoomActionPending ? "REMOVING..." : "REMOVE"; kickButton.disabled = studyRoomActionPending;
