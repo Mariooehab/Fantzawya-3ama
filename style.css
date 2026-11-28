@@ -2451,3 +2451,34 @@ body.fai-open:before{content:"";position:fixed;inset:0;background:rgba(5,5,15,.6
 
 .study-room-layout:has(.study-room-create[hidden]){grid-template-columns:minmax(0,1fr)}
 .study-room-layout:has(.study-room-create[hidden]) .study-room-inbox{grid-column:1/-1}
+
+
+/* Keep Study Session tabs fixed to the viewport while scrolling */
+#studySessionFilters.study-session-topbar{
+    position:fixed!important;
+    top:82px!important;
+    left:calc(255px + 38px);
+    right:38px;
+    width:auto;
+    margin:0;
+    z-index:1000;
+    box-shadow:0 12px 35px rgba(0,0,0,.38);
+}
+#studySessions .study-room-layout{margin-top:76px}
+@media(max-width:1100px){
+    #studySessionFilters.study-session-topbar{
+        left:calc(220px + 23px);
+        right:23px;
+    }
+}
+@media(max-width:760px){
+    #studySessionFilters.study-session-topbar{
+        top:10px!important;
+        left:13px;
+        right:13px;
+    }
+    #studySessions .study-room-layout{margin-top:68px}
+}
+@media(max-width:480px){
+    #studySessions .study-room-layout{margin-top:62px}
+}
