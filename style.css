@@ -1573,6 +1573,11 @@ body.fai-open:before{content:"";position:fixed;inset:0;background:rgba(5,5,15,.6
 /* Study room management + immersive timer */
 .study-room-list-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
 .study-room-extra-actions{display:flex;justify-content:center;flex-wrap:wrap;gap:9px;margin:12px 0}
+.study-room-extra-actions .mini-action{min-height:40px;padding:0 16px;font-size:10px}
+.study-participant-row{display:flex;align-items:center;gap:8px;max-width:100%}
+.study-participant-row .study-participant-chip{overflow-wrap:anywhere}
+.study-participant-row .mini-action{flex-shrink:0}
+@media(max-width:480px){.study-room-extra-actions .mini-action{flex:1 1 145px}.study-participant-row{align-items:flex-start;flex-wrap:wrap}}
 
 /* Study Session fullscreen */
 .study-fullscreen-trigger {
