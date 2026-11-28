@@ -4554,112 +4554,13 @@ async function saveStudyRoomCompletion(roomId) {
 }
 
 async function leaveStudyRoomTransaction(roomId) {
-    const uid = auth.currentUser?.uid;
-    const roomRef = doc(db, "studyRooms", roomId);
-    return runTransaction(db, async transaction => {
-        const snapshot = await transaction.get(roomRef);
-        if (!snapshot.exists()) throw new Error("This Study Session no longer exists.");
-        const room = snapshot.data();
-        const members = room.memberUids || [];
-        if (!["waiting", "active"].includes(room.status)) throw new Error("You cannot leave a session that has already ended.");
-        if (!uid || !members.includes(uid)) throw new Error("You are no longer a participant in this Study Session.");
-
-        const remaining = members.filter(memberUid => memberUid !== uid);
-        const isHost = room.ownerUid === uid;
-        const nextHostUid = isHost ? remaining[0] : null;
-        const completionRef = room.status === "active"
-            ? doc(db, "studyRoomCompletions", `${roomId}_${uid}`)
-            : null;
-        const nextHostProfileRef = nextHostUid ? doc(db, "publicProfiles", nextHostUid) : null;
-        const [completionSnapshot, nextHostProfile] = await Promise.all([
-            completionRef ? transaction.get(completionRef) : Promise.resolve(null),
-            nextHostProfileRef ? transaction.get(nextHostProfileRef) : Promise.resolve(null)
-        ]);
-        const leaveDuration = room.status === "active" ? studyRoomElapsedSeconds(room, Date.now()) : 0;
-        const revision = (Number(room.participantEventRevision) || 0) + 1;
-        const event = { uid, actorUid: uid, action: "left", revision, createdAt: serverTimestamp() };
-        const updates = {
-            memberUids: remaining,
-            participantEventRevision: revision,
-            lastParticipantEvent: event
-        };
-        if (nextHostUid) {
-            updates.ownerUid = nextHostUid;
-            updates.ownerUsername = nextHostProfile?.exists() ? nextHostProfile.data().username || "Member" : "Member";
-        } else if (isHost && room.status === "active") {
-            updates.status = "completed";
-            updates.endedAt = serverTimestamp();
-            updates.finalSeconds = leaveDuration;
-            updates.autoEnded = false;
-        } else if (isHost && room.status === "waiting") {
-            updates.status = "cancelled";
-            updates.endedAt = serverTimestamp();
-        }
-
-        if (completionRef && !completionSnapshot?.exists()) {
-            const endedAt = serverTimestamp();
-            transaction.set(completionRef, {
-                roomId,
-                uid,
-                durationSeconds: leaveDuration,
-                mode: room.mode,
-                startedAt: room.startedAt,
-                endedAt,
-                completedAt: endedAt
-            });
-        }
-        transaction.update(roomRef, updates);
-        return { status: updates.status || room.status, hostTransferred: Boolean(nextHostUid) };
-    });
+    const response = await manageStudyRoomCall({ action: "leave", roomId });
+    return response.data || {};
 }
 
 async function kickStudyRoomParticipantTransaction(roomId, targetUid) {
-    const actorUid = auth.currentUser?.uid;
-    const roomRef = doc(db, "studyRooms", roomId);
-    const removalRef = doc(db, "studyRoomRemovals", `${roomId}_${targetUid}`);
-    const completionRef = doc(db, "studyRoomCompletions", `${roomId}_${targetUid}`);
-    return runTransaction(db, async transaction => {
-        const snapshot = await transaction.get(roomRef);
-        if (!snapshot.exists()) throw new Error("This Study Session no longer exists.");
-        const room = snapshot.data();
-        const members = room.memberUids || [];
-        const kickedUids = room.kickedUids || [];
-        if (!actorUid || room.ownerUid !== actorUid || !["waiting", "active"].includes(room.status)) {
-            throw new Error("Only the host can remove a participant from a live Study Session.");
-        }
-        if (!targetUid || targetUid === actorUid || !members.includes(targetUid) || kickedUids.includes(targetUid)) {
-            throw new Error("Choose a current participant to remove.");
-        }
-        let completionSnapshot = null;
-        if (room.status === "active") completionSnapshot = await transaction.get(completionRef);
-        const revision = (Number(room.participantEventRevision) || 0) + 1;
-        const event = { uid: targetUid, actorUid, action: "kicked", revision, createdAt: serverTimestamp() };
-        transaction.update(roomRef, {
-            memberUids: members.filter(memberUid => memberUid !== targetUid),
-            kickedUids: [...kickedUids, targetUid],
-            participantEventRevision: revision,
-            lastParticipantEvent: event
-        });
-        transaction.set(removalRef, {
-            roomId,
-            uid: targetUid,
-            roomName: room.name || "Study Session",
-            type: "kicked",
-            createdAt: serverTimestamp()
-        });
-        if (room.status === "active" && !completionSnapshot.exists()) {
-            const endedAt = serverTimestamp();
-            transaction.set(completionRef, {
-                roomId,
-                uid: targetUid,
-                durationSeconds: studyRoomElapsedSeconds(room, Date.now()),
-                mode: room.mode,
-                startedAt: room.startedAt,
-                endedAt,
-                completedAt: endedAt
-            });
-        }
-    });
+    const response = await manageStudyRoomCall({ action: "kick", roomId, targetUid });
+    return response.data || {};
 }
 
 async function leaveStudyRoom(roomId = activeStudyRoomId, button = document.getElementById("studyLeaveRoomBtn")) {
