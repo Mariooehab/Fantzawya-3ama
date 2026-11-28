@@ -30,6 +30,8 @@ import {
     getIdToken
 } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-auth.js";
 
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-functions.js";
+
 import {
     doc,
     setDoc,
@@ -48,6 +50,9 @@ import {
     Timestamp
 } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 
+
+const studyRoomFunctions = getFunctions(auth.app, "us-central1");
+const manageStudyRoomCall = httpsCallable(studyRoomFunctions, "manageStudyRoom");
 
 /* ELEMENTS */
 const authContainer = document.getElementById("authContainer");
@@ -3705,12 +3710,11 @@ function studyRoomTimestampMillis(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 function studyRoomRemaining(room) {
-    // Firestore serverTimestamp can briefly be unresolved in a local snapshot.
-    // Never interpret a missing start timestamp as an already-finished session.
     const started = studyRoomTimestampMillis(room?.startedAt);
     if (!started) return null;
-    const now = Date.now();
-    if (room.mode === "stopwatch") return Math.max(0, Math.floor((now - started) / 1000));
+    const pausedAt = studyRoomTimestampMillis(room.pausedAt);
+    const now = pausedAt || Date.now();
+    if (room.mode === "stopwatch") return Math.max(0, Math.floor((now - started - (Number(room.pausedSeconds) || 0) * 1000) / 1000));
     const configuredEnd = studyRoomTimestampMillis(room.targetEndAt);
     const end = configuredEnd || (room.mode === "countdown" ? started + (Number(room.durationSeconds) || 0) * 1000 : 0);
     if (!end) return null;
@@ -3720,12 +3724,16 @@ function studyRoomElapsedSeconds(room, endAt) {
     const started = studyRoomTimestampMillis(room?.startedAt);
     let ended = studyRoomTimestampMillis(endAt);
     if (!started || !ended) return 0;
-    if (room.mode === "countdown") ended = Math.min(ended, started + (Number(room.durationSeconds) || 0) * 1000);
-    if (room.mode === "until" && room.targetEndAt && typeof room.targetEndAt === "object") {
+    if (room.pausedAt) ended = Math.min(ended, studyRoomTimestampMillis(room.pausedAt) || ended);
+    if (room.mode === "countdown") {
+        const configuredEnd = studyRoomTimestampMillis(room.targetEndAt) || started + (Number(room.durationSeconds) || 0) * 1000;
+        ended = Math.min(ended, configuredEnd);
+    }
+    if (room.mode === "until") {
         const targetEnd = studyRoomTimestampMillis(room.targetEndAt);
         if (targetEnd) ended = Math.min(ended, targetEnd);
     }
-    return Math.max(0, Math.floor((ended - started) / 1000));
+    return Math.max(0, Math.floor((ended - started) / 1000) - Math.max(0, Number(room.pausedSeconds) || 0));
 }
 function studyRoomErrorMessage(error, action) {
     const messages = {
@@ -4095,7 +4103,7 @@ function syncStudyRoomTicker() {
         stopStudyRoomTicker();
         return;
     }
-    if (activeStudyRoomData?.status === "active") {
+    if (activeStudyRoomData?.status === "active" && !activeStudyRoomData.pausedAt) {
         if (!studyRoomTicker) studyRoomTicker = setInterval(tickStudyRoom, 1000);
         tickStudyRoom();
     } else {
@@ -4141,10 +4149,23 @@ function renderStudyRoom(){
     document.getElementById("studyHostControls").hidden = !isHost;
     document.getElementById("studyHostStartBtn").hidden = !isHost || room.status !== "waiting";
     document.getElementById("studyHostStopBtn").hidden = !isHost || !["active", "ending"].includes(room.status);
-    document.getElementById("studyHostStartBtn").disabled = studyRoomActionPending;
+    const readyUids = Array.isArray(room.readyUids) ? room.readyUids : [];
+    const allReady = members.length > 0 && members.every(memberUid => readyUids.includes(memberUid));
+    const readyButton = document.getElementById("studyMemberReadyBtn");
+    if (readyButton) {
+        readyButton.hidden = room.status !== "waiting";
+        readyButton.disabled = studyRoomActionPending;
+        readyButton.classList.toggle("is-ready", readyUids.includes(uid));
+        readyButton.innerHTML = readyUids.includes(uid) ? '<i class="fas fa-check"></i> YOU ARE READY' : '<i class="far fa-circle"></i> MARK AS READY';
+    }
+    document.getElementById("studyHostStartBtn").disabled = studyRoomActionPending || !allReady;
     document.getElementById("studyHostStopBtn").disabled = studyRoomActionPending;
+    const pauseButton = document.getElementById("studyHostPauseBtn");
+    const resumeButton = document.getElementById("studyHostResumeBtn");
+    if (pauseButton) { pauseButton.hidden = !isHost || room.status !== "active" || !!room.pausedAt; pauseButton.disabled = studyRoomActionPending; }
+    if (resumeButton) { resumeButton.hidden = !isHost || room.status !== "active" || !room.pausedAt; resumeButton.disabled = studyRoomActionPending; }
     if (!studyRoomActionPending) {
-        document.getElementById("studyHostStartBtn").innerHTML = '<i class="fas fa-play"></i> START SESSION';
+        document.getElementById("studyHostStartBtn").innerHTML = allReady ? '<i class="fas fa-play"></i> START SESSION' : '<i class="fas fa-hourglass-half"></i> WAITING FOR EVERYONE';
         if (!endingStudyRoom) document.getElementById("studyHostStopBtn").innerHTML = room.status === "ending"
             ? '<i class="fas fa-rotate"></i> RETRY SAVE' : '<i class="fas fa-stop"></i> END SESSION';
     }
@@ -4157,36 +4178,81 @@ function renderStudyRoom(){
     notice.classList.remove("error");
     notice.textContent = activeStudyRoomNotice || (room.status === "ending"
         ? isHost ? "The timer is stopped. Retry saving the final time if needed." : "The host stopped the timer and is saving its final time."
-        : isHost ? "You are the host. Only you can start or end this shared timer." : "The host controls the timer. Your clock stays synchronized with the room.");
+        : room.status === "waiting" ? `${readyUids.length}/${members.length} members ready. The host can start when everyone is ready.`
+        : room.pausedAt ? "The host paused the timer. Your study time is safely on hold."
+        : isHost ? "You are the host. You can pause, resume, or end this shared timer." : "The host controls the timer. Your clock stays synchronized with the room.");
 
     loadStudyRoomParticipantProfiles(room);
     const participants = document.getElementById("studyLiveParticipants");
     participants.replaceChildren();
     members.forEach(memberUid => {
-        const row = document.createElement("div");
-        row.className = "study-participant-row";
-        const chip = document.createElement("span");
-        chip.className = "study-participant-chip";
         const profile = activeStudyRoomProfiles.get(memberUid) || {};
-        const name = memberUid === room.ownerUid
-            ? room.ownerUsername || profile.username || "Host"
-            : memberUid === uid ? currentProfile?.username || "You" : profile.username || `Member ${memberUid.slice(0, 6)}`;
-        chip.textContent = `${name}${memberUid === room.ownerUid ? " · HOST" : memberUid === uid ? " · YOU" : ""}`;
-        row.append(chip);
+        const name = memberUid === room.ownerUid ? room.ownerUsername || profile.username || "Host" : memberUid === uid ? currentProfile?.username || "You" : profile.username || `Member ${memberUid.slice(0, 6)}`;
+        const card = document.createElement("div"); card.className = "study-participant-card";
+        const open = document.createElement("button"); open.type = "button"; open.className = "study-participant-open";
+        const avatar = document.createElement("span"); avatar.className = "study-participant-avatar";
+        const photo = profile.photoURL || profile.photoUrl || profile.avatarUrl || profile.profilePhoto || profile.photo || "";
+        if (photo) { const img = document.createElement("img"); img.src = photo; img.alt = ""; img.loading = "lazy"; img.onerror = () => { avatar.textContent = (name[0] || "M").toUpperCase(); }; avatar.append(img); }
+        else avatar.textContent = (name[0] || "M").toUpperCase();
+        const identity = document.createElement("span"); identity.className = "study-participant-identity";
+        const label = document.createElement("strong"); label.textContent = name + (memberUid === room.ownerUid ? " · HOST" : memberUid === uid ? " · YOU" : "");
+        const state = document.createElement("small"); const isReady = readyUids.includes(memberUid);
+        state.className = isReady ? "ready" : "not-ready"; state.textContent = room.status === "waiting" ? (isReady ? "READY" : "NOT READY") : (isReady ? "READY" : "IN SESSION");
+        identity.append(label, state); open.append(avatar, identity); open.addEventListener("click", () => openStudyMemberProfile(memberUid)); card.append(open);
         if (isHost && memberUid !== uid && ["waiting", "active"].includes(room.status)) {
-            const kickButton = document.createElement("button");
-            kickButton.type = "button";
-            kickButton.className = "mini-action danger-action";
-            kickButton.textContent = studyRoomActionPending ? "REMOVING..." : "REMOVE";
-            kickButton.disabled = studyRoomActionPending;
-            kickButton.setAttribute("aria-label", `Remove ${name} from the Study Session`);
-            kickButton.addEventListener("click", () => kickStudyRoomParticipant(memberUid, name, kickButton));
-            row.append(kickButton);
+            const kickButton = document.createElement("button"); kickButton.type = "button"; kickButton.className = "mini-action danger-action";
+            kickButton.textContent = studyRoomActionPending ? "REMOVING..." : "REMOVE"; kickButton.disabled = studyRoomActionPending;
+            kickButton.setAttribute("aria-label", `Remove ${name} from the Study Session`); kickButton.addEventListener("click", () => kickStudyRoomParticipant(memberUid, name, kickButton)); card.append(kickButton);
         }
-        participants.append(row);
+        participants.append(card);
     });
     syncStudyRoomTicker();
 }
+
+function openStudyMemberProfile(memberUid) {
+    const room=activeStudyRoomData;if(!room||!room.memberUids?.includes(memberUid))return;
+    const profile=activeStudyRoomProfiles.get(memberUid)||{};
+    const name=memberUid===room.ownerUid?room.ownerUsername||profile.username||"Host":memberUid===auth.currentUser?.uid?currentProfile?.username||"You":profile.username||"Member";
+    const photo=profile.photoURL||profile.photoUrl||profile.avatarUrl||profile.profilePhoto||profile.photo||"";
+    const modal=document.getElementById("studyMemberProfileModal"),avatar=document.getElementById("studyMemberModalAvatar");avatar.replaceChildren();
+    if(photo){const img=document.createElement("img");img.src=photo;img.alt="";avatar.append(img);}else avatar.textContent=(name[0]||"M").toUpperCase();
+    document.getElementById("studyMemberModalName").textContent=name;
+    document.getElementById("studyMemberModalUsername").textContent=profile.username?"@"+profile.username:(memberUid===auth.currentUser?.uid?"Your profile":"Study member");
+    const ready=(room.readyUids||[]).includes(memberUid),state=document.getElementById("studyMemberModalStatus");
+    state.textContent=room.status==="waiting"?(ready?"READY":"NOT READY"):(room.pausedAt?"SESSION PAUSED":"IN SESSION");
+    state.className="study-member-modal-status "+(ready?"ready":"not-ready");
+    const messageButton=document.getElementById("studyMemberMessageBtn");messageButton.hidden=memberUid===auth.currentUser?.uid||!["waiting","active"].includes(room.status);
+    messageButton.onclick=()=>openStudyPrivateChat(memberUid,name);document.getElementById("studyPrivateChatPanel").hidden=true;modal.hidden=false;
+}
+function openStudyPrivateChat(targetUid,targetName) {
+    const room=activeStudyRoomData,uid=auth.currentUser?.uid;if(!room||!uid||!room.memberUids?.includes(targetUid)||targetUid===uid)return;
+    if(studyPrivateChatUnsubscribe)studyPrivateChatUnsubscribe();studyPrivateChatTargetUid=targetUid;
+    document.getElementById("studyPrivateChatPanel").hidden=false;document.getElementById("studyPrivateChatTitle").textContent="Chat with "+targetName;
+    const chatId=[uid,targetUid].sort().join("_"),messages=document.getElementById("studyPrivateChatMessages");messages.replaceChildren();
+    studyPrivateChatUnsubscribe=onSnapshot(query(collection(db,"studyRooms",room.id,"privateChats",chatId,"messages"),orderBy("createdAt","asc")),snap=>{
+        if(activeStudyRoomId!==room.id||studyPrivateChatTargetUid!==targetUid)return;messages.replaceChildren();
+        if(snap.empty){const p=document.createElement("p");p.className="study-chat-empty";p.textContent="Start a private conversation.";messages.append(p);return;}
+        snap.forEach(item=>{const data=item.data(),bubble=document.createElement("article");bubble.className="study-chat-message"+(data.senderUid===uid?" mine":"");
+            const sender=document.createElement("strong");sender.textContent=data.senderUid===uid?"You":data.senderUsername||targetName;
+            const body=document.createElement("p");body.textContent=data.text||"";const time=document.createElement("time"),ms=studyRoomTimestampMillis(data.createdAt);
+            time.textContent=ms?new Date(ms).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}):"Sending…";bubble.append(sender,body,time);messages.append(bubble);});
+        messages.scrollTop=messages.scrollHeight;
+    },error=>{console.error("Private Study chat sync failed:",error);messages.textContent="Private chat could not be loaded.";});
+}
+const privateChatForm=document.getElementById("studyPrivateChatForm");
+if(privateChatForm)privateChatForm.addEventListener("submit",async event=>{
+    event.preventDefault();const room=activeStudyRoomData,uid=auth.currentUser?.uid,targetUid=studyPrivateChatTargetUid;
+    const input=document.getElementById("studyPrivateChatInput"),button=document.getElementById("studyPrivateChatSendBtn"),value=input?.value.trim();
+    if(!room||!uid||!targetUid||!value||!room.memberUids?.includes(targetUid)||studyRoomChatSending)return;
+    studyRoomChatSending=true;button.disabled=true;
+    try{const chatId=[uid,targetUid].sort().join("_");await addDoc(collection(db,"studyRooms",room.id,"privateChats",chatId,"messages"),{senderUid:uid,recipientUid:targetUid,senderUsername:currentProfile?.username||"Member",text:value.slice(0,1000),createdAt:serverTimestamp()});input.value="";input.focus();}
+    catch(error){console.error("Private chat send failed:",error);showAppPopup("Could not send your private message.",{error:true});}
+    finally{studyRoomChatSending=false;button.disabled=false;}
+});
+const closeMemberModal=document.getElementById("studyMemberModalClose");
+if(closeMemberModal)closeMemberModal.addEventListener("click",()=>{if(studyPrivateChatUnsubscribe)studyPrivateChatUnsubscribe();studyPrivateChatUnsubscribe=null;studyPrivateChatTargetUid=null;document.getElementById("studyMemberProfileModal").hidden=true;});
+const closePrivateChat=document.getElementById("studyPrivateChatBack");
+if(closePrivateChat)closePrivateChat.addEventListener("click",()=>{if(studyPrivateChatUnsubscribe)studyPrivateChatUnsubscribe();studyPrivateChatUnsubscribe=null;studyPrivateChatTargetUid=null;document.getElementById("studyPrivateChatPanel").hidden=true;});
 
 function renderStudyRoomChat(docs) {
     const container = document.getElementById("studyChatMessages");
@@ -4283,7 +4349,7 @@ function tickStudyRoom(){
     if (room.status === "waiting") {
         stopStudyRoomTicker();
         clock.textContent = room.mode === "countdown" ? studyFormatClock(room.durationSeconds) : "00:00:00";
-        subtext.textContent = "Waiting for the host to start";
+        subtext.textContent = "Waiting for everyone to be ready";
         return;
     }
     if (room.status === "ending") {
@@ -4299,6 +4365,7 @@ function tickStudyRoom(){
         return;
     }
     const value = studyRoomRemaining(room);
+    if (room.pausedAt) { clock.textContent = studyFormatClock(value ?? 0); subtext.textContent = "PAUSED BY HOST"; return; }
     if (value === null) {
         clock.textContent = "--:--:--";
         subtext.textContent = "Synchronizing session start…";
@@ -4307,34 +4374,39 @@ function tickStudyRoom(){
     clock.textContent = studyFormatClock(value);
     subtext.textContent = room.mode === "stopwatch" ? "Elapsed study time" :
         `Time remaining${room.targetEndAt ? ` • ends ${new Date(studyRoomTimestampMillis(room.targetEndAt)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}`;
-    if (room.mode !== "stopwatch" && value <= 0 && room.ownerUid === auth.currentUser?.uid) endStudyRoom(true);
+    if (!room.pausedAt && room.mode !== "stopwatch" && value <= 0 && room.ownerUid === auth.currentUser?.uid) endStudyRoom(true);
 }
+const readyStudyMemberBtn=document.getElementById("studyMemberReadyBtn");
+if(readyStudyMemberBtn)readyStudyMemberBtn.addEventListener("click",async()=>{
+    const room=activeStudyRoomData, uid=auth.currentUser?.uid;
+    if(!room||!uid||room.status!=="waiting"||studyRoomActionPending)return;
+    studyRoomActionPending=true;renderStudyRoom();
+    try{await manageStudyRoomCall({action:"ready",roomId:room.id,ready:!(room.readyUids||[]).includes(uid)});}
+    catch(error){showAppPopup(studyRoomActionError(error,"update readiness"),{error:true});}
+    finally{studyRoomActionPending=false;if(activeStudyRoomData)renderStudyRoom();}
+});
 const startStudyHostBtn=document.getElementById("studyHostStartBtn");
 if(startStudyHostBtn)startStudyHostBtn.addEventListener("click",async()=>{
-    const roomId = activeStudyRoomId;
-    if (!activeStudyRoomData || activeStudyRoomData.ownerUid !== auth.currentUser?.uid ||
-        activeStudyRoomData.status !== "waiting" || studyRoomActionPending) return;
-    studyRoomActionPending = true;
-    renderStudyRoom();
-    startStudyHostBtn.textContent = "STARTING...";
-    try {
-        await runTransaction(db, async transaction => {
-            const roomRef = doc(db, "studyRooms", roomId);
-            const snapshot = await transaction.get(roomRef);
-            if (!snapshot.exists()) throw new Error("This Study Session no longer exists.");
-            const room = snapshot.data();
-            if (room.ownerUid !== auth.currentUser?.uid || room.status !== "waiting") {
-                throw new Error("Only the host can start a waiting Study Session.");
-            }
-            transaction.update(roomRef, { status: "active", startedAt: serverTimestamp() });
-        });
-    } catch (error) {
-        console.error("Could not start Study Session:", error);
-        showAppPopup(studyRoomActionError(error, "start"), { error: true });
-    } finally {
-        studyRoomActionPending = false;
-        if (activeStudyRoomId === roomId && activeStudyRoomData) renderStudyRoom();
-    }
+    const room=activeStudyRoomData, roomId=activeStudyRoomId, ready=room?.readyUids||[];
+    if(!room||room.ownerUid!==auth.currentUser?.uid||room.status!=="waiting"||!room.memberUids?.length||!room.memberUids.every(memberUid=>ready.includes(memberUid))||studyRoomActionPending)return;
+    studyRoomActionPending=true;renderStudyRoom();
+    try{await manageStudyRoomCall({action:"start",roomId});}
+    catch(error){showAppPopup(studyRoomActionError(error,"start"),{error:true});}
+    finally{studyRoomActionPending=false;if(activeStudyRoomId===roomId&&activeStudyRoomData)renderStudyRoom();}
+});
+const pauseStudyHostBtn=document.getElementById("studyHostPauseBtn");
+if(pauseStudyHostBtn)pauseStudyHostBtn.addEventListener("click",async()=>{
+    const room=activeStudyRoomData;if(!room||room.ownerUid!==auth.currentUser?.uid||room.status!=="active"||room.pausedAt||studyRoomActionPending)return;
+    studyRoomActionPending=true;renderStudyRoom();try{await manageStudyRoomCall({action:"pause",roomId:room.id});}
+    catch(error){showAppPopup(studyRoomActionError(error,"pause"),{error:true});}
+    finally{studyRoomActionPending=false;if(activeStudyRoomData)renderStudyRoom();}
+});
+const resumeStudyHostBtn=document.getElementById("studyHostResumeBtn");
+if(resumeStudyHostBtn)resumeStudyHostBtn.addEventListener("click",async()=>{
+    const room=activeStudyRoomData;if(!room||room.ownerUid!==auth.currentUser?.uid||room.status!=="active"||!room.pausedAt||studyRoomActionPending)return;
+    studyRoomActionPending=true;renderStudyRoom();try{await manageStudyRoomCall({action:"resume",roomId:room.id});}
+    catch(error){showAppPopup(studyRoomActionError(error,"resume"),{error:true});}
+    finally{studyRoomActionPending=false;if(activeStudyRoomData)renderStudyRoom();}
 });
 const stopStudyHostBtn=document.getElementById("studyHostStopBtn");
 if(stopStudyHostBtn)stopStudyHostBtn.addEventListener("click",()=>endStudyRoom(false));
@@ -4431,6 +4503,8 @@ async function endStudyRoom(auto){
 function closeActiveStudyRoom(){
     if (studyRoomChatUnsubscribe) studyRoomChatUnsubscribe();
     studyRoomChatUnsubscribe = null;
+    if (studyPrivateChatUnsubscribe) studyPrivateChatUnsubscribe();
+    studyPrivateChatUnsubscribe = null; studyPrivateChatTargetUid = null;
     if (activeStudyRoomUnsubscribe) activeStudyRoomUnsubscribe();
     if (activeStudyRoomRemovalUnsubscribe) activeStudyRoomRemovalUnsubscribe();
     activeStudyRoomUnsubscribe = null;
