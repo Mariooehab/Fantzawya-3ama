@@ -37,6 +37,12 @@
 <input autocomplete="email" id="registerEmail" placeholder="Enter your email" required="" type="email"/>
 <label for="registerPassword">Password</label>
 <input autocomplete="new-password" id="registerPassword" minlength="6" placeholder="Create a password" required="" type="password"/>
+<label for="registerReligion">Religion</label>
+<select id="registerReligion" required>
+<option value="">Choose your religion</option>
+<option value="muslim">Muslim</option>
+<option value="christian">Christian</option>
+</select>
 <button class="submit-btn" type="submit">CREATE ACCOUNT</button>
 </form>
 <p aria-live="polite" id="message" role="status"></p>
@@ -54,6 +60,7 @@
 <nav class="side-nav">
 <a class="nav-link active" data-page="overview" href="#overview"><span>⌂</span> Overview</a>
 <a class="nav-link" data-page="study" href="#study"><span>◴</span> Study Timer</a>
+<a class="nav-link prayer-nav-link" data-page="prayers" href="#prayers" hidden><span aria-hidden="true">🕌</span> Prayers</a>
 <a class="nav-link" data-page="exams" href="#exams"><span>◷</span> Exam Countdown</a>
 <a class="nav-link" data-page="challenges" href="#challenges"><span>📚</span> Study Session</a>
 <a class="nav-link" data-page="leaderboard" href="#leaderboard"><span>♛</span> Leaderboard</a>
@@ -103,10 +110,18 @@
 <h2><span id="streakValue">0</span> <small>days</small></h2><p>Keep your consistency alive</p>
 </article>
 <article class="stat-card">
+<div class="stat-top"><span class="stat-icon streak-icon">🏆</span><span class="stat-label">LONGEST STREAK</span></div>
+<h2><span id="longestStreakValue">0</span> <small>days</small></h2><p>Your personal best</p>
+</article>
+<article class="stat-card">
 <div class="stat-top"><span class="stat-icon rank-icon">◴</span><span class="stat-label">STUDY TIME</span></div>
 <h2 id="totalStudyTime">0m</h2><p id="completedSessions">0 completed sessions</p>
 </article>
-</section></section><section class="app-page" data-page="study" id="page-study"><section class="study-timer-section" id="studyTimer">
+<article class="stat-card">
+<div class="stat-top"><span class="stat-icon rank-icon">📅</span><span class="stat-label">STUDY DAYS</span></div>
+<h2><span id="studyDaysValue">0</span></h2><p>Days with completed study time</p>
+</article>
+</section><p id="studyStatsError" class="community-note error" role="status" hidden></p></section><section class="app-page" data-page="study" id="page-study"><section class="study-timer-section" id="studyTimer">
 <div class="timer-heading">
 <div>
 <span class="section-kicker">FOCUS MODE</span>
@@ -184,7 +199,46 @@
 </div>
 </div>
 <p aria-live="polite" class="timer-message" id="timerMessage" role="status">Your completed sessions will be saved to your account.</p>
-</section></section><section class="app-page" data-page="exams" id="page-exams">
+</section></section>
+<section class="app-page" data-page="prayers" id="page-prayers" aria-labelledby="prayerPageTitle">
+ <section class="community-section prayer-page-section">
+  <div class="section-heading prayer-page-heading">
+   <div><span class="section-kicker">DAILY WORSHIP</span><h3 id="prayerPageTitle">Prayer Times</h3><p class="panel-description">Accurate prayer times for your selected city and calculation method.</p></div>
+   <div class="prayer-method-control"><label for="prayerCalculationMethod">Calculation method</label><select id="prayerCalculationMethod">
+    <option value="5">Egyptian General Authority</option>
+    <option value="3">Muslim World League</option>
+    <option value="2">Islamic Society of North America</option>
+    <option value="4">Umm Al-Qura, Makkah</option>
+    <option value="1">University of Islamic Sciences, Karachi</option>
+    <option value="12">France (UOIF)</option>
+    <option value="13">Diyanet, Turkey</option>
+   </select></div>
+  </div>
+  <article class="panel prayer-page-location">
+   <span class="prayer-page-location-icon" aria-hidden="true">⌖</span>
+   <div><strong id="prayerPageCity">Your selected city</strong><small id="prayerPageTimezone">Loading local timezone…</small></div>
+   <span id="prayerPageDate" class="prayer-page-date"></span>
+  </article>
+  <p id="prayerPageStatus" class="community-note prayer-page-status" role="status" aria-live="polite">Loading today's prayer schedule…</p>
+  <div class="prayer-live-grid" aria-label="Live prayer summary">
+   <article class="panel prayer-live-card prayer-current-card">
+    <span class="prayer-live-label">LOCAL TIME</span><strong id="prayerCurrentTime">--:--:--</strong><small>In the selected city's timezone</small>
+   </article>
+   <article class="panel prayer-live-card prayer-next-card">
+    <span class="prayer-live-label">NEXT PRAYER</span><strong id="prayerNextName">Loading…</strong><span id="prayerNextTime" class="prayer-live-time">--:--</span><small>Time remaining</small><b id="prayerNextCountdown" class="prayer-countdown">--:--:--</b>
+   </article>
+   <article class="panel prayer-live-card prayer-previous-card">
+    <span class="prayer-live-label">PREVIOUS PRAYER</span><strong id="prayerPreviousName">Loading…</strong><span id="prayerPreviousTime" class="prayer-live-time">--:--</span><small>Time elapsed</small><b id="prayerSincePrevious" class="prayer-elapsed">--:--:--</b>
+   </article>
+  </div>
+  <article class="panel prayer-schedule-panel">
+   <div class="panel-heading"><div><h4>Today's Schedule</h4><span class="community-caption">FIVE DAILY PRAYERS</span></div><span class="prayer-schedule-icon" aria-hidden="true">🕌</span></div>
+   <ol id="prayerScheduleList" class="prayer-schedule-list" aria-label="Today's prayer schedule"><li class="prayer-schedule-placeholder">Prayer times will appear here when loaded.</li></ol>
+   <p class="prayer-sunrise-note">Sunrise is shown for information only; it is not an obligatory prayer.</p>
+  </article>
+ </section>
+</section>
+<section class="app-page" data-page="exams" id="page-exams">
 <section class="community-section">
  <div class="section-heading"><div><span class="section-kicker">STAY ON TRACK</span><h3>Exam Countdown</h3></div></div>
  <article class="panel" style="max-width:760px">
@@ -371,14 +425,20 @@
    <h3 class="profile-name" id="profileUsername">User</h3>
    <p class="profile-email" id="profileEmail">email</p>
    <span class="profile-badge">COMMUNITY MEMBER</span>
-   <div class="profile-info"><div><span>Total XP</span><strong id="profileXP">0 XP</strong></div></div>
+   <div class="profile-info"><div><span>Total XP</span><strong id="profileXP">0 XP</strong></div><div><span>Religion</span><strong id="profileReligionValue">—</strong></div></div>
    <div class="stats-grid profile-study-stats" style="margin-top:22px">
     <article class="stat-card"><span class="stat-label">TOTAL STUDY TIME</span><h2 id="profileStudyTime">0s</h2></article>
     <article class="stat-card"><span class="stat-label">⏳ COUNTDOWN</span><h2 id="profileCountdownTime">0s</h2></article>
     <article class="stat-card"><span class="stat-label">⏱ STOPWATCH</span><h2 id="profileStopwatchTime">0s</h2></article>
     <article class="stat-card"><span class="stat-label">📚 STUDY SESSION</span><h2 id="profileStudySessionTime">0s</h2></article>
+    <article class="stat-card"><span class="stat-label">🔥 CURRENT STREAK</span><h2 id="profileCurrentStreak">0</h2></article>
+    <article class="stat-card"><span class="stat-label">🏆 LONGEST STREAK</span><h2 id="profileLongestStreak">0</h2></article>
+    <article class="stat-card"><span class="stat-label">📅 STUDY DAYS</span><h2 id="profileStudyDays">0</h2></article>
+    <article class="stat-card"><span class="stat-label">TODAY</span><h2 id="profileTodayStudyTime">0s</h2></article>
+    <article class="stat-card"><span class="stat-label">LAST 7 DAYS</span><h2 id="profileWeekStudyTime">0s</h2></article>
    </div>
    <p class="community-note" style="text-align:center"><span id="profileSessionCount">0</span> completed sessions</p>
+   <article class="panel profile-session-history"><div class="panel-heading"><h4>Study Sessions</h4><span class="community-caption">COMPLETED HISTORY</span></div><div id="profileStudyHistory" class="study-session-history">Loading study history...</div></article>
    <div class="profile-study-reset"><button id="resetStudyStatsBtn" class="mini-action danger-action" type="button">↻ RESET STUDY STATS</button><p class="community-note">This clears your completed timer sessions and shared Study Session records.</p></div>
    </div>
    <div class="profile-edit">
@@ -391,6 +451,13 @@
     <label for="editCoverUrl">Profile cover photo URL</label>
     <input id="editCoverUrl" type="url" placeholder="https://example.com/cover.jpg">
     <p class="profile-edit-hint">This is the wide banner behind your profile photo, like Facebook. Use a direct image URL.</p>
+    <label for="editReligion">Religion</label>
+    <select id="editReligion" required>
+     <option value="muslim">Muslim</option>
+     <option value="christian">Christian</option>
+    </select>
+    <button class="community-action-btn" id="saveReligionBtn" type="button">UPDATE RELIGION</button>
+    <p id="religionStatus" class="community-note" aria-live="polite"></p>
     <button class="community-action-btn" id="saveProfileBtn" type="button">SAVE PROFILE</button>
     <p id="profileStatus" class="community-note" aria-live="polite"></p>
    </div>
@@ -411,6 +478,32 @@
    </div>
   </article>
  </div>
+ <section class="panel prayer-settings-panel" aria-labelledby="prayerSettingsTitle">
+  <div class="section-heading"><div><span class="section-kicker">PERSONAL REMINDERS</span><h3 id="prayerSettingsTitle">Prayer &amp; Religion</h3></div><span class="prayer-settings-icon" aria-hidden="true">✦</span></div>
+  <p class="panel-description" id="prayerReligionDescription">Prayer settings are private to your account.</p>
+  <div id="muslimPrayerSettings" hidden>
+   <div class="prayer-settings-grid">
+    <div><label for="prayerCityInput">City</label><input id="prayerCityInput" maxlength="80" value="Giza" autocomplete="address-level2"></div>
+    <div><label for="prayerCountryInput">Country</label><input id="prayerCountryInput" maxlength="80" value="Egypt" autocomplete="country-name"></div>
+   </div>
+   <label class="prayer-reminder-toggle"><input id="muslimPrayerEnabled" type="checkbox" checked><span>Enable prayer reminders</span></label>
+   <button id="saveMuslimPrayerSettings" class="community-action-btn" type="button">SAVE PRAYER SETTINGS</button>
+   <p id="nextPrayerLabel" class="prayer-next-label">Loading today's prayer times…</p>
+   <p id="prayerTimesStatus" class="community-note" role="status"></p>
+   <div id="prayerTimesList" class="prayer-times-list" aria-live="polite"></div>
+  </div>
+  <div id="christianPrayerSettings" hidden>
+   <form id="christianPrayerReminderForm" class="christian-prayer-form">
+    <input id="editingChristianReminderTime" type="hidden">
+    <div><label for="christianPrayerTitle">Reminder title</label><input id="christianPrayerTitle" maxlength="80" required placeholder="Personal prayer time"></div>
+    <div><label for="christianPrayerTime">Time</label><input id="christianPrayerTime" type="time" required></div>
+    <div class="christian-prayer-form-actions"><button class="community-action-btn" id="saveChristianPrayerReminder" type="submit">ADD REMINDER</button><button class="mini-action" id="cancelChristianPrayerEdit" type="button" hidden>CANCEL EDIT</button></div>
+   </form>
+   <p class="profile-edit-hint">Times use your device's local timezone. Reminders stay private to your account.</p>
+   <div id="christianPrayerReminderList" class="prayer-reminder-list">Loading your reminders…</div>
+  </div>
+  <p id="prayerSettingsStatus" class="community-note" role="status"></p>
+ </section>
 </section></section><footer class="dashboard-footer">FANTZAWYA 3AMA <span>•</span> STUDY • COMPETE • CONQUER</footer></main>
 </div>
 <nav class="mobile-nav" hidden id="mobileNav" aria-label="Mobile navigation">
@@ -418,6 +511,7 @@
 <div class="mobile-nav-menu" id="mobileNavMenu">
 <a class="mobile-nav-link active" data-page="overview" href="#overview"><span>⌂</span><small>Home</small></a>
 <a class="mobile-nav-link" data-page="study" href="#study"><span>◴</span><small>Study Timer</small></a>
+<a class="mobile-nav-link prayer-nav-link" data-page="prayers" href="#prayers" hidden><span aria-hidden="true">🕌</span><small>Prayers</small></a>
 <a class="mobile-nav-link" data-page="exams" href="#exams"><span>◷</span><small>Exam Countdown</small></a>
 <a class="mobile-nav-link" data-page="challenges" href="#challenges"><span>📚</span><small>Study</small></a>
 <a class="mobile-nav-link" data-page="leaderboard" href="#leaderboard"><span>♛</span><small>Ranks</small></a>
@@ -443,6 +537,29 @@
   </div>
  </section>
 </div>
+<dialog id="requiredReligionDialog" class="required-religion-dialog" aria-labelledby="requiredReligionTitle">
+ <section class="required-religion-card">
+  <div class="prayer-reminder-icon" aria-hidden="true">✦</div>
+  <h2 id="requiredReligionTitle">Choose your religion</h2>
+  <p>Please choose Muslim or Christian to continue using Fantzawya 3ama.</p>
+  <label for="requiredReligionSelect">Religion</label>
+  <select id="requiredReligionSelect" required>
+   <option value="">Choose your religion</option>
+   <option value="muslim">Muslim</option>
+   <option value="christian">Christian</option>
+  </select>
+  <p id="requiredReligionError" class="community-note error" role="status"></p>
+  <button id="requiredReligionSave" class="community-action-btn" type="button">SAVE &amp; CONTINUE</button>
+ </section>
+</dialog>
+<dialog id="prayerReminderDialog" class="prayer-reminder-dialog" aria-labelledby="prayerReminderTitle" aria-describedby="prayerReminderMessage">
+ <section class="prayer-reminder-card">
+  <div class="prayer-reminder-icon" aria-hidden="true">🕌</div>
+  <h2 id="prayerReminderTitle"></h2>
+  <p id="prayerReminderMessage"></p>
+  <button id="prayerReminderConfirm" class="community-action-btn" type="button">OK</button>
+ </section>
+</dialog>
 <script src="app.js" type="module"></script>
 <!-- Fantzawya AI assistant -->
 

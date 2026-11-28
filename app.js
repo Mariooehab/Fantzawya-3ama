@@ -1,4 +1,22 @@
 import { auth, db } from "./firebase.js";
+import {
+    calculateStudyStatistics,
+    formatStudyDate,
+    formatStudyDuration,
+    getStudyDayKey,
+    normalizeStudyRecords
+} from "./study-stats.js";
+import {
+    formatAlAdhanDate,
+    isValidPrayerTime,
+    isValidReligion,
+    localClockToMillis,
+    normalizePrayerSettings,
+    parsePrayerClock,
+    buildPrayerTimeline,
+    shiftPrayerDate,
+    zonedClockToMillis
+} from "./prayer-utils.js";
 
 import {
     createUserWithEmailAndPassword,
@@ -47,15 +65,17 @@ const examDateInput = document.getElementById("examDate");
 
 /* PAGE NAVIGATION */
 function showPage(pageName) {
-    const validPages = ["overview", "study", "exams", "challenges", "leaderboard", "friends", "league", "todo", "profile"];
-    const selected = validPages.includes(pageName) ? pageName : "overview";
+    const validPages = ["overview", "study", "prayers", "exams", "challenges", "leaderboard", "friends", "league", "todo", "profile"];
+    const canOpenPrayerPage = pageName !== "prayers" || currentProfile?.religion === "muslim";
+    const selected = validPages.includes(pageName) && canOpenPrayerPage ? pageName : "overview";
     document.querySelectorAll(".app-page").forEach(page => page.classList.toggle("active", page.dataset.page === selected));
     document.querySelectorAll("[data-page]").forEach(link => link.classList.toggle("active", link.dataset.page === selected));
-    const titles = { overview: "Dashboard", study: "Study Timer", exams: "Exam Countdown", challenges: "Study Session", leaderboard: "All-time Leaderboard", friends: "Friends", league: "Study League", todo: "To-do & Notes", profile: "My Profile" };
+    const titles = { overview: "Dashboard", study: "Study Timer", prayers: "Prayers", exams: "Exam Countdown", challenges: "Study Session", leaderboard: "All-time Leaderboard", friends: "Friends", league: "Study League", todo: "To-do & Notes", profile: "My Profile" };
     const heading = document.querySelector(".topbar h2");
     if (heading) heading.textContent = titles[selected];
     if (history.replaceState) history.replaceState(null, "", `#${selected}`);
     window.scrollTo({ top: 0, behavior: "smooth" });
+    if (selected === "prayers") updatePrayerPage();
 }
 document.querySelectorAll(".nav-link[data-page], .mobile-nav-link[data-page]").forEach(link => {
     link.addEventListener("click", event => {
@@ -97,10 +117,21 @@ const timerAddTimeBtn = document.getElementById("timerAddTimeBtn");
 const timerMessage = document.getElementById("timerMessage");
 
 let currentProfile = null;
+function updatePrayerNavigationVisibility() {
+    const visible = currentProfile?.religion === "muslim";
+    document.querySelectorAll(".prayer-nav-link").forEach(link => {
+        link.hidden = !visible;
+    });
+    if (!visible && location.hash === "#prayers") showPage("overview");
+}
 // The owner identity is resolved from the authenticated account, then published
 // in publicProfiles so every member (including newly registered members) can see it.
 const OWNER_EMAIL = "untiban59@gmail.com";
 const isOwnerAccount = user => (user?.email || "").trim().toLowerCase() === OWNER_EMAIL;
+function getLocalStudyTimeZone() {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
 function appendOwnerTag(target, text = "👑 OWNER & MAKER", extraClass = "") {
     if (!target || target.querySelector?.(".owner-tag")) return;
     const tag = document.createElement("span");
@@ -108,6 +139,50 @@ function appendOwnerTag(target, text = "👑 OWNER & MAKER", extraClass = "") {
     tag.textContent = text;
     tag.setAttribute("aria-label", "Website owner and maker");
     target.append(tag);
+}
+
+const requiredReligionDialog = document.getElementById("requiredReligionDialog");
+const requiredReligionSelect = document.getElementById("requiredReligionSelect");
+const requiredReligionSave = document.getElementById("requiredReligionSave");
+const requiredReligionError = document.getElementById("requiredReligionError");
+requiredReligionDialog?.addEventListener("cancel", event => event.preventDefault());
+
+function chooseRequiredReligion(user, persistReligion) {
+    if (!requiredReligionDialog || !requiredReligionSelect || !requiredReligionSave) {
+        return Promise.reject(new Error("The required religion selection dialog is unavailable."));
+    }
+
+    requiredReligionSelect.value = "";
+    requiredReligionError.textContent = "";
+    requiredReligionSave.disabled = false;
+    requiredReligionSave.textContent = "SAVE & CONTINUE";
+    requiredReligionDialog.showModal();
+
+    return new Promise(resolve => {
+        requiredReligionSave.onclick = async () => {
+            const religion = requiredReligionSelect.value;
+            if (!isValidReligion(religion)) {
+                requiredReligionError.textContent = "Choose Muslim or Christian to continue.";
+                return;
+            }
+            requiredReligionSave.disabled = true;
+            requiredReligionSave.textContent = "SAVING...";
+            requiredReligionError.textContent = "";
+            try {
+                if (auth.currentUser?.uid !== user.uid) throw new Error("Your sign-in changed. Please sign in again.");
+                await persistReligion(religion);
+                requiredReligionDialog.close();
+                resolve(religion);
+            } catch (error) {
+                console.error("Could not save required religion:", error);
+                requiredReligionError.textContent = error.code === "permission-denied"
+                    ? "Firestore denied this update. Publish the current Firestore Rules and retry."
+                    : `Could not save your choice (${error.code || "error"}). Check your connection and retry.`;
+                requiredReligionSave.disabled = false;
+                requiredReligionSave.textContent = "SAVE & CONTINUE";
+            }
+        };
+    });
 }
 
 let authFlowInProgress = false;
@@ -188,7 +263,7 @@ tabs.forEach(tab => {
 /* AUTH PROFILE RECOVERY
    Firebase Authentication can create the account before a Firestore write fails.
    This repairs that half-created account instead of leaving registration stuck. */
-async function ensureAccountDocuments(user, fallbackUsername = "") {
+async function ensureAccountDocuments(user, fallbackUsername = "", religion = null) {
     const userRef = doc(db, "users", user.uid);
     const userSnapshot = await getDoc(userRef);
     let profile = userSnapshot.exists() ? userSnapshot.data() : null;
@@ -207,7 +282,9 @@ async function ensureAccountDocuments(user, fallbackUsername = "") {
             streak: 0,
             status: "online",
             avatarUrl: "",
-            coverUrl: ""
+            coverUrl: "",
+            studyTimeZone: getLocalStudyTimeZone(),
+            ...(isValidReligion(religion) ? { religion } : {})
         };
         await setDoc(userRef, profile);
         profile = { ...profile, username: recoveredName };
@@ -220,6 +297,7 @@ async function ensureAccountDocuments(user, fallbackUsername = "") {
         usernameLower: username.toLowerCase(),
         avatarUrl: profile.avatarUrl || "",
         coverUrl: profile.coverUrl || "",
+        studyTimeZone: profile.studyTimeZone || getLocalStudyTimeZone(),
         ...(isOwnerAccount(user) ? { isOwner: true } : {}),
         updatedAt: serverTimestamp()
     }, { merge: true });
@@ -233,10 +311,15 @@ registerForm.addEventListener("submit", async event => {
     const username = document.getElementById("registerUsername").value.trim().replace(/\s+/g, " ");
     const email = document.getElementById("registerEmail").value.trim().toLowerCase();
     const password = document.getElementById("registerPassword").value;
+    const religion = document.getElementById("registerReligion").value;
     const button = registerForm.querySelector(".submit-btn");
 
     if (Array.from(username).length < 3 || Array.from(username).length > 20) {
         showMessage("Username must be between 3 and 20 characters.", true);
+        return;
+    }
+    if (!isValidReligion(religion)) {
+        showMessage("Choose Muslim or Christian before creating your account.", true);
         return;
     }
 
@@ -254,6 +337,12 @@ registerForm.addEventListener("submit", async event => {
             if (createError.code !== "auth/email-already-in-use") throw createError;
             try {
                 result = await signInWithEmailAndPassword(auth, email, password);
+                const userSnapshot = await getDoc(doc(db, "users", result.user.uid));
+                if (!userSnapshot.exists()) {
+                    await loadDashboard(result.user, username);
+                    registerForm.reset();
+                    return;
+                }
                 const existingProfile = await ensureAccountDocuments(result.user, username);
                 if (existingProfile.username && existingProfile.username !== username) {
                     appAlert("This email already has an account. We signed you in and restored its missing profile data.");
@@ -271,7 +360,7 @@ registerForm.addEventListener("submit", async event => {
             }
         }
 
-        await ensureAccountDocuments(result.user, username);
+        await ensureAccountDocuments(result.user, username, religion);
         registerForm.reset();
         await appAlert("Account created successfully!");
         await loadDashboard(result.user);
@@ -331,17 +420,28 @@ loginForm.addEventListener("submit", async event => {
 
 
 /* DASHBOARD */
-async function loadDashboard(user) {
+async function loadDashboard(user, fallbackUsername = "") {
     try {
         let profileSnapshot = await getDoc(doc(db, "users", user.uid));
         if (!profileSnapshot.exists()) {
-            await ensureAccountDocuments(user);
+            await chooseRequiredReligion(user, religion => ensureAccountDocuments(user, fallbackUsername, religion));
             profileSnapshot = await getDoc(doc(db, "users", user.uid));
         }
         if (!profileSnapshot.exists()) throw new Error("Could not restore this account profile. Check Firestore Rules.");
 
         const profile = profileSnapshot.data();
+        if (!isValidReligion(profile.religion)) {
+            profile.religion = await chooseRequiredReligion(user, religion =>
+                updateDoc(doc(db, "users", user.uid), { religion })
+            );
+        }
+        const studyTimeZone = getLocalStudyTimeZone();
+        if (profile.studyTimeZone !== studyTimeZone) {
+            await updateDoc(doc(db, "users", user.uid), { studyTimeZone });
+            profile.studyTimeZone = studyTimeZone;
+        }
         currentProfile = profile;
+        updatePrayerNavigationVisibility();
         const publicProfileRef = doc(db, "publicProfiles", user.uid);
         const publicProfileSnapshot = await getDoc(publicProfileRef);
         if (!publicProfileSnapshot.exists()) {
@@ -351,17 +451,24 @@ async function loadDashboard(user) {
                 usernameLower: (profile.username || "User").toLowerCase(),
                 avatarUrl: profile.avatarUrl || "",
                 coverUrl: profile.coverUrl || "",
+                studyTimeZone,
                 ...(isOwnerAccount(user) ? { isOwner: true } : {}),
                 updatedAt: serverTimestamp()
             });
-        } else if (isOwnerAccount(user) && publicProfileSnapshot.data().isOwner !== true) {
-            await updateDoc(publicProfileRef, { isOwner: true, updatedAt: serverTimestamp() });
+        } else {
+            const publicProfile = publicProfileSnapshot.data();
+            const publicProfileUpdates = {};
+            if (publicProfile.studyTimeZone !== studyTimeZone) publicProfileUpdates.studyTimeZone = studyTimeZone;
+            if (isOwnerAccount(user) && publicProfile.isOwner !== true) publicProfileUpdates.isOwner = true;
+            if (Object.keys(publicProfileUpdates).length) {
+                publicProfileUpdates.updatedAt = serverTimestamp();
+                await updateDoc(publicProfileRef, publicProfileUpdates);
+            }
         }
 
         const username = profile.username || "User";
         const email = profile.email || user.email || "";
         const xp = Number(profile.xp) || 0;
-        const streak = Number(profile.streak) || 0;
         const initial = username.charAt(0).toUpperCase();
 
         document.getElementById("welcomeUsername").textContent = username;
@@ -369,6 +476,8 @@ async function loadDashboard(user) {
         document.getElementById("topbarUsername").textContent = username;
         document.getElementById("profileUsername").textContent = username;
         document.getElementById("profileEmail").textContent = email;
+        document.getElementById("profileReligionValue").textContent = profile.religion === "muslim" ? "Muslim" : "Christian";
+        document.getElementById("editReligion").value = profile.religion;
         ["sidebarUsername", "topbarUsername", "profileUsername"].forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
@@ -385,7 +494,7 @@ async function loadDashboard(user) {
             if (avatar) avatar.classList.toggle("owner-avatar", isOwnerAccount(user));
         });
         document.getElementById("xpValue").textContent = xp.toLocaleString();
-        document.getElementById("streakValue").textContent = streak;
+        document.getElementById("streakValue").textContent = "0";
         document.getElementById("profileXP").textContent = `${xp.toLocaleString()} XP`;
         document.getElementById("sidebarAvatar").textContent = initial;
         document.getElementById("topbarAvatar").textContent = initial;
@@ -401,6 +510,7 @@ async function loadDashboard(user) {
         dashboard.hidden = false;
         mobileNav.hidden = false;
         showPage(location.hash.replace("#", "") || "overview");
+        initializePrayerReminderSystem(user.uid, profile);
 
         loadExamDate(user.uid);
         await loadStudyStats(user.uid);
@@ -572,10 +682,12 @@ if (saveProfileBtn) saveProfileBtn.addEventListener("click", async () => {
             usernameLower,
             avatarUrl,
             coverUrl,
+            studyTimeZone: currentProfile?.studyTimeZone || getLocalStudyTimeZone(),
+            ...(isOwnerAccount(user) ? { isOwner: true } : {}),
             updatedAt: serverTimestamp()
         });
 
-        currentProfile = { ...currentProfile, username, avatarUrl, coverUrl };
+        currentProfile = { ...currentProfile, username, avatarUrl, coverUrl, studyTimeZone: currentProfile?.studyTimeZone || getLocalStudyTimeZone() };
         document.getElementById("welcomeUsername").textContent = username;
         document.getElementById("sidebarUsername").textContent = username;
         document.getElementById("topbarUsername").textContent = username;
@@ -594,6 +706,1295 @@ if (saveProfileBtn) saveProfileBtn.addEventListener("click", async () => {
         saveProfileBtn.textContent = "SAVE PROFILE";
     }
 });
+
+const saveReligionBtn = document.getElementById("saveReligionBtn");
+if (saveReligionBtn) saveReligionBtn.addEventListener("click", async () => {
+    const user = auth.currentUser;
+    const religion = document.getElementById("editReligion").value;
+    if (!user || !isValidReligion(religion)) {
+        setInlineStatus("religionStatus", "Choose Muslim or Christian.", true);
+        return;
+    }
+
+    saveReligionBtn.disabled = true;
+    saveReligionBtn.textContent = "SAVING...";
+    try {
+        await updateDoc(doc(db, "users", user.uid), { religion });
+        currentProfile = { ...currentProfile, religion };
+        document.getElementById("profileReligionValue").textContent = religion === "muslim" ? "Muslim" : "Christian";
+        setInlineStatus("religionStatus", "Religion updated successfully.");
+        synchronizePrayerProfile(currentProfile, user.uid);
+    } catch (error) {
+        console.error("Religion update failed:", error);
+        setInlineStatus("religionStatus", error.code === "permission-denied"
+            ? "Firestore denied this update. Publish the current Firestore Rules."
+            : `Could not update religion (${error.code || "error"}).`, true);
+    } finally {
+        saveReligionBtn.disabled = false;
+        saveReligionBtn.textContent = "UPDATE RELIGION";
+    }
+});
+
+/* PRAYER REMINDER STATE */
+const MUSLIM_PRAYERS = [
+    { key: "Fajr", name: "الفجر", display: "Fajr" },
+    { key: "Dhuhr", name: "الظهر", display: "Dhuhr" },
+    { key: "Asr", name: "العصر", display: "Asr" },
+    { key: "Maghrib", name: "المغرب", display: "Maghrib" },
+    { key: "Isha", name: "العشاء", display: "Isha" }
+];
+const PRAYER_CALCULATION_METHODS = [
+    { id: 5, label: "Egyptian General Authority" },
+    { id: 3, label: "Muslim World League" },
+    { id: 2, label: "Islamic Society of North America" },
+    { id: 4, label: "Umm Al-Qura, Makkah" },
+    { id: 1, label: "University of Islamic Sciences, Karachi" },
+    { id: 12, label: "France (UOIF)" },
+    { id: 13, label: "Diyanet, Turkey" }
+];
+let activePrayerUserId = null;
+let activePrayerReligion = null;
+let prayerSettings = normalizePrayerSettings(null);
+let prayerCalculationMethod = 5;
+let prayerTimes = null;
+let prayerTimesStale = false;
+let prayerYesterdayTimes = null;
+let prayerTomorrowTimes = null;
+let prayerBoundaryRequestKey = "";
+let prayerBoundaryRequest = null;
+let prayerBoundaryLoadedKey = "";
+let prayerBoundaryRetryUntil = 0;
+let prayerBoundaryError = "";
+let christianPrayerReminders = [];
+let prayerPending = null;
+let prayerPauseActive = false;
+let prayerTicker = null;
+let prayerUserDocumentUnsubscribe = null;
+let christianReminderUnsubscribe = null;
+let prayerModalHeartbeat = null;
+let prayerModalLockToken = null;
+let prayerFetchToken = 0;
+let prayerFetchInProgress = false;
+let prayerLastRequestedDate = null;
+let prayerSessionRestoreReady = true;
+let prayerNextLabelUpdatedMinute = null;
+
+function createPrayerToken() {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return [...bytes].map(value => value.toString(16).padStart(2, "0")).join("");
+}
+
+const prayerTabId = createPrayerToken();
+
+function prayerPendingKey(uid) { return `fantzawya_prayer_pending_${uid}`; }
+function prayerConfirmedKey(uid) { return `fantzawya_prayer_confirmed_${uid}`; }
+function prayerModalLockKey(uid) { return `fantzawya_prayer_modal_lock_${uid}`; }
+function prayerCacheKey(uid) { return `fantzawya_prayer_cache_${uid}`; }
+function prayerRetryKey(uid) { return `fantzawya_prayer_retry_${uid}`; }
+function prayerMethodKey(uid) { return `fantzawya_prayer_method_${uid}`; }
+function prayerDateCacheKey(uid, dayKey, settings) {
+    return `${prayerCacheKey(uid)}_${encodeURIComponent(getPrayerLocationKey(settings.city, settings.country, settings.method))}_${dayKey}`;
+}
+
+function resetPrayerBoundaryState() {
+    prayerBoundaryRequestKey = "";
+    prayerBoundaryRequest = null;
+    prayerBoundaryLoadedKey = "";
+    prayerBoundaryRetryUntil = 0;
+    prayerBoundaryError = "";
+    prayerYesterdayTimes = null;
+    prayerTomorrowTimes = null;
+}
+
+function readLocalJson(key, fallback = null) {
+    try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+    } catch (error) {
+        console.warn("Could not read local prayer reminder state:", error);
+        return fallback;
+    }
+}
+
+function readPrayerPending(uid = activePrayerUserId) {
+    if (!uid) return null;
+    const pending = readLocalJson(prayerPendingKey(uid));
+    if (!pending || pending.uid !== uid || typeof pending.id !== "string" ||
+        typeof pending.reminderId !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(pending.dateKey) ||
+        !["muslim", "christian"].includes(pending.kind) ||
+        !Number.isFinite(Number(pending.dueAtMs)) || Number(pending.dueAtMs) <= 0) return null;
+    return pending;
+}
+
+function prayerReminderIsPending() {
+    if (!activePrayerUserId) return false;
+    const pending = readPrayerPending(activePrayerUserId);
+    if (pending) {
+        prayerPending = pending;
+        prayerPauseActive = true;
+        return true;
+    }
+    return prayerPauseActive && prayerPending?.uid === activePrayerUserId;
+}
+
+function setPrayerStatus(text, error = false) {
+    const status = document.getElementById("prayerSettingsStatus");
+    if (!status) return;
+    status.textContent = text;
+    status.classList.toggle("error", error);
+}
+
+function readConfirmedPrayerIds(uid, dayKey) {
+    const stored = readLocalJson(prayerConfirmedKey(uid), {});
+    const state = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+    return new Set(Array.isArray(state?.[dayKey]) ? state[dayKey] : []);
+}
+
+function prayerReminderWasConfirmed(uid, dayKey, reminderId) {
+    return readConfirmedPrayerIds(uid, dayKey).has(reminderId);
+}
+
+function markPrayerReminderConfirmed(pending) {
+    const uid = pending.uid;
+    const stored = readLocalJson(prayerConfirmedKey(uid), {});
+    const state = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+    const ids = new Set(Array.isArray(state[pending.dateKey]) ? state[pending.dateKey] : []);
+    ids.add(pending.reminderId);
+    state[pending.dateKey] = [...ids];
+    const oldDates = Object.keys(state).sort();
+    oldDates.slice(0, Math.max(0, oldDates.length - 10)).forEach(day => delete state[day]);
+    localStorage.setItem(prayerConfirmedKey(uid), JSON.stringify(state));
+}
+
+function releasePrayerModalLock(expectedToken = null) {
+    const token = expectedToken || prayerModalLockToken;
+    if (!token) return;
+    if (prayerModalLockToken === token) {
+        if (prayerModalHeartbeat) clearInterval(prayerModalHeartbeat);
+        prayerModalHeartbeat = null;
+        prayerModalLockToken = null;
+    }
+    if (!activePrayerUserId) return;
+    const key = prayerModalLockKey(activePrayerUserId);
+    const lock = readLocalJson(key);
+    if (lock?.token === token) {
+        try {
+            localStorage.removeItem(key);
+        } catch (error) {
+            console.warn("Could not release the prayer modal tab lock:", error);
+        }
+    }
+}
+
+function closePrayerModalWithoutConfirming() {
+    const dialog = document.getElementById("prayerReminderDialog");
+    if (dialog?.open) dialog.close();
+    releasePrayerModalLock();
+}
+
+function renderPrayerReminderModal(pending) {
+    const dialog = document.getElementById("prayerReminderDialog");
+    if (!dialog || !pending) return;
+    const title = document.getElementById("prayerReminderTitle");
+    const message = document.getElementById("prayerReminderMessage");
+    const icon = dialog.querySelector(".prayer-reminder-icon");
+    if (pending.kind === "muslim") {
+        title.textContent = `حان الآن وقت أذان ${pending.prayerName} 🕌`;
+        message.textContent = "حان وقت الصلاة، خُد استراحة وصلّي، وربنا يتقبل منك ❤️";
+        if (icon) icon.textContent = "🕌";
+    } else {
+        title.textContent = "إخواتنا المسيحيين، حان وقت الصلاة ✝️";
+        message.textContent = "خُد وقتك في الصلاة والراحة، ربنا يبارك يومك ❤️";
+        if (icon) icon.textContent = "✝️";
+    }
+    if (!dialog.open) dialog.showModal();
+}
+
+function tryShowPendingPrayerModal() {
+    if (!prayerSessionRestoreReady || !prayerPending || !activePrayerUserId || prayerPending.uid !== activePrayerUserId) return;
+    const dialog = document.getElementById("prayerReminderDialog");
+    if (!dialog || dialog.open || prayerModalLockToken || document.hidden) return;
+
+    const key = prayerModalLockKey(activePrayerUserId);
+    const currentLock = readLocalJson(key);
+    if (currentLock?.expiresAt > Date.now() && currentLock.tabId !== prayerTabId) {
+        setPrayerStatus("A prayer reminder is waiting for confirmation in another open tab.");
+        return;
+    }
+
+    const token = createPrayerToken();
+    prayerModalLockToken = token;
+    const refreshLock = () => {
+        localStorage.setItem(key, JSON.stringify({
+            uid: activePrayerUserId,
+            reminderId: prayerPending?.reminderId,
+            pendingId: prayerPending?.id,
+            tabId: prayerTabId,
+            token,
+            expiresAt: Date.now() + 12000
+        }));
+    };
+    let canCoordinateTabs = true;
+    try {
+        refreshLock();
+    } catch (error) {
+        canCoordinateTabs = false;
+        console.warn("Could not coordinate the prayer modal between tabs:", error);
+        setPrayerStatus("This browser cannot synchronize reminder tabs; confirm the reminder in this tab.", true);
+    }
+    setTimeout(() => {
+        const lock = canCoordinateTabs ? readLocalJson(key) : null;
+        if (canCoordinateTabs &&
+            (lock?.token !== token || prayerPending?.id !== lock.pendingId || prayerPending?.uid !== lock.uid)) {
+            releasePrayerModalLock(token);
+            return;
+        }
+        const currentPending = canCoordinateTabs ? readPrayerPending(activePrayerUserId) : prayerPending;
+        if (document.hidden || !currentPending || prayerPending?.uid !== activePrayerUserId ||
+            prayerPending?.id !== currentPending.id) {
+            releasePrayerModalLock(token);
+            return;
+        }
+        renderPrayerReminderModal(prayerPending);
+        if (!canCoordinateTabs) return;
+        prayerModalHeartbeat = setInterval(() => {
+            if (document.hidden || !prayerPending || prayerPending.uid !== activePrayerUserId) {
+                closePrayerModalWithoutConfirming();
+                return;
+            }
+            refreshLock();
+        }, 4000);
+    }, 40);
+}
+
+function forcePauseTimerForPrayer(dueAtMs = Date.now()) {
+    if (!activeSession || activeSession.status !== "running") return false;
+    const phaseStart = Number(activeSession.phaseStartedAtMs) || Number(dueAtMs) || Date.now();
+    const pauseAt = Math.min(Date.now(), Math.max(phaseStart, Number(dueAtMs) || Date.now()));
+    advanceManualTimer(activeSession, pauseAt);
+    if (activeSession.status === "running") {
+        activeSession.phaseElapsedBeforePauseMs = getPhaseElapsedMilliseconds(activeSession, pauseAt);
+        activeSession.phaseStartedAtMs = null;
+        activeSession.pauseStartedAtMs = pauseAt;
+        activeSession.status = "paused";
+    }
+    stopTimerTicker();
+    saveLocalSession();
+    renderTimerControls();
+    updateTimerDisplay();
+    setTimerMessage("Study timer paused for your prayer reminder. It will not resume automatically.");
+    return true;
+}
+
+function createPendingPrayerReminder(reminder) {
+    if (!activePrayerUserId || prayerReminderIsPending()) return;
+    const pending = {
+        ...reminder,
+        uid: activePrayerUserId,
+        sessionId: activeSession?.id || null,
+        createdAt: Date.now()
+    };
+    prayerPending = pending;
+    prayerPauseActive = true;
+    try {
+        localStorage.setItem(prayerPendingKey(activePrayerUserId), JSON.stringify(pending));
+    } catch (error) {
+        console.error("Could not persist the pending prayer reminder:", error);
+        setPrayerStatus("The reminder is active, but this browser could not persist it locally. Keep this tab open until you confirm.", true);
+    }
+    forcePauseTimerForPrayer(pending.dueAtMs);
+    renderTimerControls();
+    tryShowPendingPrayerModal();
+}
+
+function confirmPrayerReminder() {
+    const pending = prayerPending;
+    if (!pending || pending.uid !== activePrayerUserId) return;
+    try {
+        markPrayerReminderConfirmed(pending);
+        const stored = readPrayerPending(activePrayerUserId);
+        if (stored?.id === pending.id) localStorage.removeItem(prayerPendingKey(activePrayerUserId));
+        prayerPending = null;
+        prayerPauseActive = false;
+        closePrayerModalWithoutConfirming();
+        setPrayerStatus("Reminder confirmed. Your study timer remains paused; resume it when you are ready.");
+        renderTimerControls();
+    } catch (error) {
+        console.error("Could not confirm prayer reminder:", error);
+        setPrayerStatus("Could not save your confirmation. The reminder will remain pending; retry.", true);
+    }
+}
+
+document.getElementById("prayerReminderDialog")?.addEventListener("cancel", event => event.preventDefault());
+document.getElementById("prayerReminderConfirm")?.addEventListener("click", confirmPrayerReminder);
+
+function handlePrayerStorageEvent(event) {
+    const uid = activePrayerUserId;
+    if (!uid) return;
+    if (event.key === prayerPendingKey(uid)) {
+        const nextPending = event.newValue ? readLocalJson(prayerPendingKey(uid)) : null;
+        if (nextPending?.id) {
+            prayerPending = nextPending;
+            prayerPauseActive = true;
+            forcePauseTimerForPrayer(nextPending.dueAtMs);
+            renderTimerControls();
+            tryShowPendingPrayerModal();
+        } else {
+            prayerPending = null;
+            prayerPauseActive = false;
+            closePrayerModalWithoutConfirming();
+            renderTimerControls();
+        }
+        return;
+    }
+
+    if (event.key === getTimerStorageKey(uid) && prayerReminderIsPending() && event.newValue) {
+        try {
+            const incoming = JSON.parse(event.newValue);
+            if (!incoming?.id || (activeSession?.id && incoming.id !== activeSession.id)) return;
+            activeSession = incoming;
+            if (activeSession.status === "running") forcePauseTimerForPrayer(prayerPending.dueAtMs);
+            else {
+                stopTimerTicker();
+                renderTimerControls();
+                updateTimerDisplay();
+            }
+        } catch (error) {
+            console.error("Could not synchronize the prayer pause across tabs:", error);
+        }
+    }
+}
+
+window.addEventListener("storage", handlePrayerStorageEvent);
+window.addEventListener("beforeunload", releasePrayerModalLock);
+document.addEventListener("visibilitychange", () => {
+    if (document.hidden && prayerModalLockToken) closePrayerModalWithoutConfirming();
+    else if (!document.hidden && prayerReminderIsPending()) tryShowPendingPrayerModal();
+});
+
+function getPrayerTimeZone(value) {
+    if (typeof value !== "string" || !value) return getLocalStudyTimeZone();
+    try {
+        new Intl.DateTimeFormat("en-US", { timeZone: value });
+        return value;
+    } catch {
+        return getLocalStudyTimeZone();
+    }
+}
+
+function normalizePrayerMethod(value) {
+    const method = Number(value);
+    return Number.isInteger(method) && method >= 0 && method <= 23 ? method : 5;
+}
+
+function getPrayerLocationKey(city, country, method = prayerCalculationMethod) {
+    return `${String(city).trim().toLowerCase()}|${String(country).trim().toLowerCase()}|${normalizePrayerMethod(method)}`;
+}
+
+function getPrayerApiSettings() {
+    return {
+        ...normalizePrayerSettings(prayerSettings),
+        method: prayerCalculationMethod
+    };
+}
+
+function readPrayerCalculationMethod(uid, profileSettings) {
+    const storedMethod = readLocalJson(prayerMethodKey(uid));
+    if (storedMethod !== null) return normalizePrayerMethod(storedMethod);
+    return normalizePrayerMethod(profileSettings?.calculationMethod ?? profileSettings?.method ?? 5);
+}
+
+function syncPrayerMethodControl() {
+    const select = document.getElementById("prayerCalculationMethod");
+    if (!select) return;
+    const value = String(prayerCalculationMethod);
+    if (!select.querySelector(`option[value="${value}"]`)) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = PRAYER_CALCULATION_METHODS.find(method => method.id === prayerCalculationMethod)?.label ||
+            `AlAdhan method ${value}`;
+        select.append(option);
+    }
+    select.value = value;
+}
+
+async function fetchAlAdhanPrayerTimes(dayKey, settings) {
+    const url = new URL(`https://api.aladhan.com/v1/timingsByCity/${formatAlAdhanDate(dayKey)}`);
+    url.searchParams.set("city", settings.city);
+    url.searchParams.set("country", settings.country);
+    url.searchParams.set("method", String(settings.method));
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Prayer-time service returned HTTP ${response.status}.`);
+    const payload = await response.json();
+    if (payload.code !== 200 || !payload.data?.timings) {
+        throw new Error(payload.status || "Prayer-time service returned an invalid response.");
+    }
+    const timings = {};
+    for (const prayer of MUSLIM_PRAYERS) {
+        timings[prayer.key] = parsePrayerClock(payload.data.timings[prayer.key]);
+        if (!timings[prayer.key]) throw new Error(`Prayer-time service did not return ${prayer.display}.`);
+    }
+    timings.Sunrise = parsePrayerClock(payload.data.timings.Sunrise);
+    if (!timings.Sunrise) throw new Error("Prayer-time service did not return Sunrise.");
+    return {
+        timings,
+        timeZone: getPrayerTimeZone(payload.data.meta?.timezone)
+    };
+}
+
+function renderNextPrayerLabel() {
+    const nextLabel = document.getElementById("nextPrayerLabel");
+    if (!nextLabel) return;
+
+    if (!prayerTimes) {
+        nextLabel.textContent = "Today's prayer times are not available yet.";
+        return;
+    }
+
+    const today = getStudyDayKey(Date.now(), prayerTimes.timeZone);
+    if (prayerTimes.dateKey !== today || prayerTimesStale) {
+        nextLabel.textContent = "Showing the last successful prayer times; reminders are paused until today's times load.";
+    } else {
+        const upcoming = MUSLIM_PRAYERS.map(prayer => ({
+            ...prayer,
+            clock: prayerTimes.timings[prayer.key],
+            dueAtMs: zonedClockToMillis(today, prayerTimes.timings[prayer.key], prayerTimes.timeZone)
+        })).find(prayer => prayer.dueAtMs > Date.now());
+        nextLabel.textContent = upcoming
+            ? `Next prayer: ${upcoming.display} at ${upcoming.clock}`
+            : "No upcoming prayer today.";
+    }
+}
+
+function renderPrayerTimes() {
+    const list = document.getElementById("prayerTimesList");
+    if (!list) return;
+    list.replaceChildren();
+    renderNextPrayerLabel();
+
+    if (!prayerTimes) {
+        list.textContent = "Connect to the internet to load prayer times.";
+        return;
+    }
+
+    MUSLIM_PRAYERS.forEach(prayer => {
+        const row = document.createElement("div");
+        row.className = "prayer-time-row";
+        const name = document.createElement("strong");
+        name.textContent = prayer.display;
+        const time = document.createElement("span");
+        time.textContent = prayerTimes.timings[prayer.key] || "—";
+        row.append(name, time);
+        list.append(row);
+    });
+}
+
+function cachePrayerSchedule(uid, schedule) {
+    try {
+        localStorage.setItem(
+            prayerDateCacheKey(uid, schedule.dateKey, schedule),
+            JSON.stringify(schedule)
+        );
+    } catch (error) {
+        console.warn("Could not cache this day's prayer schedule:", error);
+    }
+}
+
+async function loadPrayerTimes(force = false) {
+    const uid = activePrayerUserId;
+    if (!uid || activePrayerReligion !== "muslim" || prayerFetchInProgress) return;
+    const settings = getPrayerApiSettings();
+    const locationKey = getPrayerLocationKey(settings.city, settings.country, settings.method);
+    const cache = readLocalJson(prayerCacheKey(uid));
+    const sameLocation = cache && getPrayerLocationKey(cache.city, cache.country, cache.method) === locationKey &&
+        MUSLIM_PRAYERS.every(prayer => isValidPrayerTime(cache.timings?.[prayer.key])) &&
+        isValidPrayerTime(cache.timings?.Sunrise) &&
+        typeof cache.timeZone === "string" && /^\d{4}-\d{2}-\d{2}$/.test(cache.dateKey);
+    const dateTimeZone = sameLocation ? getPrayerTimeZone(cache.timeZone) : getLocalStudyTimeZone();
+    const requestDate = getStudyDayKey(Date.now(), dateTimeZone);
+
+    if (!force && sameLocation && cache.dateKey === requestDate) {
+        prayerTimes = cache;
+        prayerTimesStale = false;
+        prayerLastRequestedDate = requestDate;
+        renderPrayerTimes();
+        updatePrayerPage();
+        return;
+    }
+
+    const retry = readLocalJson(prayerRetryKey(uid));
+    if (!force && retry?.locationKey === locationKey && retry?.dateKey === requestDate &&
+        retry.expiresAt > Date.now()) {
+        prayerTimes = sameLocation ? cache : null;
+        prayerTimesStale = Boolean(sameLocation && cache.dateKey !== requestDate);
+        renderPrayerTimes();
+        return;
+    }
+
+    const token = ++prayerFetchToken;
+    prayerFetchInProgress = true;
+    prayerLastRequestedDate = requestDate;
+    if (sameLocation) {
+        prayerTimes = cache;
+        prayerTimesStale = cache.dateKey !== requestDate;
+    }
+    const status = document.getElementById("prayerTimesStatus");
+    if (status) {
+        status.textContent = "Loading today's prayer times…";
+        status.classList.remove("error");
+    }
+    renderPrayerTimes();
+
+    try {
+        let response = await fetchAlAdhanPrayerTimes(requestDate, settings);
+        let cityDate = getStudyDayKey(Date.now(), response.timeZone);
+        if (cityDate !== requestDate) {
+            response = await fetchAlAdhanPrayerTimes(cityDate, settings);
+            cityDate = getStudyDayKey(Date.now(), response.timeZone);
+        }
+        if (token !== prayerFetchToken || activePrayerUserId !== uid) return;
+
+        prayerTimes = {
+            city: settings.city,
+            country: settings.country,
+            method: settings.method,
+            dateKey: cityDate,
+            timeZone: response.timeZone,
+            timings: response.timings,
+            fetchedAt: Date.now()
+        };
+        prayerTimesStale = prayerTimes.dateKey !== getStudyDayKey(Date.now(), prayerTimes.timeZone);
+        try {
+            localStorage.setItem(prayerCacheKey(uid), JSON.stringify(prayerTimes));
+            localStorage.removeItem(prayerRetryKey(uid));
+        } catch (storageError) {
+            console.warn("Could not cache prayer times locally:", storageError);
+        }
+        cachePrayerSchedule(uid, prayerTimes);
+        prayerLastRequestedDate = prayerTimes.dateKey;
+        if (status) status.textContent = prayerTimesStale
+            ? "Prayer times were updated; the city's local date has changed. Refreshing shortly."
+            : "Prayer times updated for today.";
+        renderPrayerTimes();
+        updatePrayerPage();
+        checkPrayerReminders();
+    } catch (error) {
+        if (token !== prayerFetchToken || activePrayerUserId !== uid) return;
+        console.error("Could not load AlAdhan prayer times:", error);
+        const retryDate = sameLocation ? getStudyDayKey(Date.now(), getPrayerTimeZone(cache.timeZone)) : requestDate;
+        try {
+            localStorage.setItem(prayerRetryKey(uid), JSON.stringify({
+                locationKey,
+                dateKey: retryDate,
+                expiresAt: Date.now() + 20 * 60 * 1000
+            }));
+        } catch (storageError) {
+            console.warn("Could not persist the prayer-time retry delay:", storageError);
+        }
+        prayerTimes = sameLocation ? cache : null;
+        prayerTimesStale = Boolean(sameLocation && cache.dateKey !== retryDate);
+        if (status) {
+            status.textContent = sameLocation
+                ? "Prayer-time service is unavailable. Showing the last successful times."
+                : "Could not load prayer times. Check the city and your internet connection, then retry.";
+            status.classList.add("error");
+        }
+        renderPrayerTimes();
+        updatePrayerPage();
+    } finally {
+        if (token === prayerFetchToken) prayerFetchInProgress = false;
+    }
+}
+
+function renderChristianPrayerReminders() {
+    const list = document.getElementById("christianPrayerReminderList");
+    if (!list) return;
+    list.replaceChildren();
+    if (!christianPrayerReminders.length) {
+        list.textContent = "No prayer reminders yet. Add one above.";
+        return;
+    }
+
+    christianPrayerReminders.forEach(reminder => {
+        const row = document.createElement("div");
+        row.className = "prayer-reminder-row";
+        const details = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = reminder.title;
+        const time = document.createElement("small");
+        time.textContent = reminder.time;
+        details.append(title, time);
+
+        const actions = document.createElement("div");
+        actions.className = "prayer-reminder-row-actions";
+        const enabledLabel = document.createElement("label");
+        enabledLabel.className = "prayer-enabled-toggle";
+        const enabled = document.createElement("input");
+        enabled.type = "checkbox";
+        enabled.checked = reminder.enabled;
+        enabled.setAttribute("aria-label", `Enable ${reminder.title}`);
+        enabled.addEventListener("change", () => setChristianReminderEnabled(reminder, enabled.checked, enabled));
+        enabledLabel.append(enabled, document.createTextNode("Enabled"));
+
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "mini-action";
+        edit.textContent = "EDIT";
+        edit.addEventListener("click", () => beginEditChristianReminder(reminder));
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "mini-action danger-action";
+        remove.textContent = "DELETE";
+        remove.addEventListener("click", () => deleteChristianReminder(reminder));
+        actions.append(enabledLabel, edit, remove);
+        row.append(details, actions);
+        list.append(row);
+    });
+}
+
+function beginEditChristianReminder(reminder) {
+    document.getElementById("editingChristianReminderTime").value = reminder.time;
+    document.getElementById("christianPrayerTitle").value = reminder.title;
+    document.getElementById("christianPrayerTime").value = reminder.time;
+    document.getElementById("saveChristianPrayerReminder").textContent = "SAVE CHANGES";
+    document.getElementById("cancelChristianPrayerEdit").hidden = false;
+    document.getElementById("christianPrayerTitle").focus();
+}
+
+function resetChristianReminderForm() {
+    document.getElementById("christianPrayerReminderForm").reset();
+    document.getElementById("editingChristianReminderTime").value = "";
+    document.getElementById("saveChristianPrayerReminder").textContent = "ADD REMINDER";
+    document.getElementById("cancelChristianPrayerEdit").hidden = true;
+}
+
+async function saveChristianPrayerReminder(event) {
+    event.preventDefault();
+    const uid = auth.currentUser?.uid;
+    if (!uid || activePrayerReligion !== "christian") return;
+    const title = document.getElementById("christianPrayerTitle").value.trim();
+    const time = document.getElementById("christianPrayerTime").value;
+    const oldTime = document.getElementById("editingChristianReminderTime").value;
+    if (!title || title.length > 80 || !isValidPrayerTime(time)) {
+        setPrayerStatus("Enter a reminder title and a valid time.", true);
+        return;
+    }
+    const existing = christianPrayerReminders.find(item => item.time === time);
+    if (existing && time !== oldTime) {
+        setPrayerStatus("A reminder already exists at that time. Choose a different time.", true);
+        return;
+    }
+
+    const button = document.getElementById("saveChristianPrayerReminder");
+    button.disabled = true;
+    const reminderRef = doc(db, "users", uid, "prayerReminders", time);
+    const oldRef = oldTime ? doc(db, "users", uid, "prayerReminders", oldTime) : null;
+    try {
+        await runTransaction(db, async transaction => {
+            const targetSnapshot = await transaction.get(reminderRef);
+            const oldSnapshot = oldRef && oldTime !== time ? await transaction.get(oldRef) : null;
+            if (oldRef && oldTime !== time && !oldSnapshot.exists()) {
+                throw new Error("This reminder changed in another tab. Refresh the list and retry.");
+            }
+            if (targetSnapshot.exists() && oldTime !== time) {
+                throw new Error("A reminder already exists at that time.");
+            }
+            const existingReminder = oldTime
+                ? christianPrayerReminders.find(item => item.time === oldTime)
+                : null;
+            if (oldRef && oldTime !== time) transaction.delete(oldRef);
+            transaction.set(reminderRef, {
+                title,
+                time,
+                enabled: existingReminder?.enabled !== false,
+                updatedAt: serverTimestamp()
+            });
+        });
+        resetChristianReminderForm();
+        setPrayerStatus("Prayer reminder saved.");
+    } catch (error) {
+        console.error("Could not save Christian prayer reminder:", error);
+        setPrayerStatus(error.code === "permission-denied"
+            ? "Firestore denied this reminder. Publish the current Firestore Rules."
+            : `Could not save reminder (${error.code || "error"}): ${error.message || "Try again."}`, true);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function setChristianReminderEnabled(reminder, enabled, input) {
+    const uid = auth.currentUser?.uid;
+    if (!uid || activePrayerReligion !== "christian") return;
+    input.disabled = true;
+    try {
+        await updateDoc(doc(db, "users", uid, "prayerReminders", reminder.time), {
+            enabled,
+            updatedAt: serverTimestamp()
+        });
+        setPrayerStatus(enabled ? "Reminder enabled." : "Reminder disabled.");
+    } catch (error) {
+        console.error("Could not update Christian prayer reminder:", error);
+        input.checked = reminder.enabled !== false;
+        setPrayerStatus(`Could not update reminder (${error.code || "error"}).`, true);
+    } finally {
+        input.disabled = false;
+    }
+}
+
+async function deleteChristianReminder(reminder) {
+    const uid = auth.currentUser?.uid;
+    if (!uid || activePrayerReligion !== "christian") return;
+    try {
+        await deleteDoc(doc(db, "users", uid, "prayerReminders", reminder.time));
+        setPrayerStatus("Prayer reminder deleted.");
+    } catch (error) {
+        console.error("Could not delete Christian prayer reminder:", error);
+        setPrayerStatus(`Could not delete reminder (${error.code || "error"}).`, true);
+    }
+}
+
+function subscribeToChristianPrayerReminders(uid) {
+    if (christianReminderUnsubscribe) christianReminderUnsubscribe();
+    christianReminderUnsubscribe = null;
+    christianPrayerReminders = [];
+    if (activePrayerReligion !== "christian") {
+        renderChristianPrayerReminders();
+        return;
+    }
+
+    christianReminderUnsubscribe = onSnapshot(collection(db, "users", uid, "prayerReminders"), snapshot => {
+        if (activePrayerUserId !== uid || activePrayerReligion !== "christian") return;
+        christianPrayerReminders = snapshot.docs.map(item => {
+            const data = item.data();
+            return {
+                id: item.id,
+                ...data,
+                enabled: data.enabled !== false
+            };
+        }).filter(item => isValidPrayerTime(item.time) && typeof item.title === "string")
+            .sort((a, b) => a.time.localeCompare(b.time));
+        renderChristianPrayerReminders();
+        checkPrayerReminders();
+    }, error => {
+        console.error("Could not synchronize Christian prayer reminders:", error);
+        setPrayerStatus(`Could not load prayer reminders (${error.code || "error"}).`, true);
+    });
+}
+
+function renderPrayerSettings() {
+    const muslimSettings = document.getElementById("muslimPrayerSettings");
+    const christianSettings = document.getElementById("christianPrayerSettings");
+    const description = document.getElementById("prayerReligionDescription");
+    const isMuslim = activePrayerReligion === "muslim";
+    const isChristian = activePrayerReligion === "christian";
+    if (muslimSettings) muslimSettings.hidden = !isMuslim;
+    if (christianSettings) christianSettings.hidden = !isChristian;
+    if (description) {
+        description.textContent = isMuslim
+            ? "Daily prayer times are calculated for your selected city and kept private to your account."
+            : isChristian
+                ? "Create private prayer reminders using your device's local time."
+                : "Choose a religion in your profile to configure prayer reminders.";
+    }
+    document.getElementById("prayerCityInput").value = prayerSettings.city;
+    document.getElementById("prayerCountryInput").value = prayerSettings.country;
+    document.getElementById("muslimPrayerEnabled").checked = prayerSettings.enabled;
+    renderPrayerTimes();
+    renderChristianPrayerReminders();
+}
+
+function synchronizePrayerProfile(data, uid) {
+    if (activePrayerUserId !== uid) return;
+    const oldReligion = activePrayerReligion;
+    const oldSettings = prayerSettings;
+    if (isValidReligion(data.religion)) activePrayerReligion = data.religion;
+    prayerSettings = normalizePrayerSettings(data.prayerSettings);
+    const religionChanged = oldReligion !== activePrayerReligion;
+    const settingsChanged = oldSettings.city !== prayerSettings.city ||
+        oldSettings.country !== prayerSettings.country ||
+        oldSettings.enabled !== prayerSettings.enabled;
+    if (currentProfile) currentProfile = {
+        ...currentProfile,
+        religion: activePrayerReligion,
+        prayerSettings
+    };
+    updatePrayerNavigationVisibility();
+    if (!religionChanged && !settingsChanged) return;
+    renderPrayerSettings();
+    if (religionChanged) {
+        prayerFetchToken += 1;
+        prayerFetchInProgress = false;
+        prayerLastRequestedDate = null;
+        prayerTimes = null;
+        prayerTimesStale = false;
+        resetPrayerBoundaryState();
+        subscribeToChristianPrayerReminders(uid);
+        if (activePrayerReligion === "muslim") {
+            loadPrayerTimes();
+        }
+    } else if (activePrayerReligion === "muslim" &&
+        (oldSettings.city !== prayerSettings.city || oldSettings.country !== prayerSettings.country)) {
+        prayerLastRequestedDate = null;
+        prayerTimes = null;
+        prayerTimesStale = false;
+        resetPrayerBoundaryState();
+        prayerFetchToken += 1;
+        prayerFetchInProgress = false;
+        loadPrayerTimes(true);
+    } else if (activePrayerReligion === "muslim" && !prayerTimes) {
+        loadPrayerTimes();
+    }
+}
+
+function initializePrayerReminderSystem(uid, profile) {
+    if (prayerTicker) clearInterval(prayerTicker);
+    if (prayerUserDocumentUnsubscribe) prayerUserDocumentUnsubscribe();
+    prayerUserDocumentUnsubscribe = null;
+    if (christianReminderUnsubscribe) christianReminderUnsubscribe();
+    christianReminderUnsubscribe = null;
+    prayerFetchToken += 1;
+    prayerFetchInProgress = false;
+    prayerLastRequestedDate = null;
+
+    activePrayerUserId = uid;
+    activePrayerReligion = profile.religion;
+    prayerSettings = normalizePrayerSettings(profile.prayerSettings);
+    prayerCalculationMethod = readPrayerCalculationMethod(uid, profile.prayerSettings);
+    prayerTimes = null;
+    prayerTimesStale = false;
+    resetPrayerBoundaryState();
+    prayerPending = readPrayerPending(uid);
+    prayerPauseActive = Boolean(prayerPending);
+    prayerSessionRestoreReady = false;
+    renderPrayerSettings();
+
+    prayerUserDocumentUnsubscribe = onSnapshot(doc(db, "users", uid), snapshot => {
+        if (!snapshot.exists()) return;
+        synchronizePrayerProfile(snapshot.data(), uid);
+    }, error => {
+        console.error("Could not synchronize prayer settings:", error);
+        setPrayerStatus(`Could not sync prayer settings (${error.code || "error"}).`, true);
+    });
+    subscribeToChristianPrayerReminders(uid);
+    if (activePrayerReligion === "muslim") loadPrayerTimes();
+    prayerTicker = setInterval(() => {
+        checkPrayerReminders();
+        updatePrayerPage();
+    }, 1000);
+    if (prayerPending) {
+        forcePauseTimerForPrayer(prayerPending.dueAtMs);
+        tryShowPendingPrayerModal();
+    }
+    checkPrayerReminders();
+}
+
+function stopPrayerReminderSystem() {
+    if (prayerTicker) clearInterval(prayerTicker);
+    prayerTicker = null;
+    if (prayerUserDocumentUnsubscribe) prayerUserDocumentUnsubscribe();
+    if (christianReminderUnsubscribe) christianReminderUnsubscribe();
+    prayerUserDocumentUnsubscribe = null;
+    christianReminderUnsubscribe = null;
+    prayerFetchToken += 1;
+    prayerFetchInProgress = false;
+    closePrayerModalWithoutConfirming();
+    activePrayerUserId = null;
+    activePrayerReligion = null;
+    prayerPending = null;
+    prayerPauseActive = false;
+    prayerSessionRestoreReady = true;
+    prayerTimes = null;
+    prayerTimesStale = false;
+    resetPrayerBoundaryState();
+    christianPrayerReminders = [];
+}
+
+function markPrayerSessionRestoreReady(uid) {
+    if (activePrayerUserId !== uid) return;
+    prayerSessionRestoreReady = true;
+    if (prayerReminderIsPending()) {
+        forcePauseTimerForPrayer(prayerPending.dueAtMs);
+        tryShowPendingPrayerModal();
+    }
+}
+
+async function saveMuslimPrayerSettings() {
+    const uid = auth.currentUser?.uid;
+    if (!uid || activePrayerReligion !== "muslim") return;
+    const city = document.getElementById("prayerCityInput").value.trim();
+    const country = document.getElementById("prayerCountryInput").value.trim();
+    if (!city || !country || city.length > 80 || country.length > 80) {
+        setPrayerStatus("Enter a valid city and country (up to 80 characters each).", true);
+        return;
+    }
+    const nextSettings = {
+        city,
+        country,
+        enabled: document.getElementById("muslimPrayerEnabled").checked
+    };
+    const button = document.getElementById("saveMuslimPrayerSettings");
+    button.disabled = true;
+    try {
+        await updateDoc(doc(db, "users", uid), { prayerSettings: nextSettings });
+        currentProfile = { ...currentProfile, prayerSettings: nextSettings };
+        const locationChanged = getPrayerLocationKey(city, country) !==
+            getPrayerLocationKey(prayerSettings.city, prayerSettings.country);
+        prayerSettings = nextSettings;
+        setPrayerStatus("Prayer settings saved.");
+        renderPrayerSettings();
+        if (locationChanged) {
+            prayerLastRequestedDate = null;
+            prayerTimes = null;
+            prayerTimesStale = false;
+            prayerFetchToken += 1;
+            prayerFetchInProgress = false;
+            resetPrayerBoundaryState();
+            await loadPrayerTimes(true);
+        }
+    } catch (error) {
+        console.error("Could not save Muslim prayer settings:", error);
+        setPrayerStatus(error.code === "permission-denied"
+            ? "Firestore denied this update. Publish the current Firestore Rules."
+            : `Could not save prayer settings (${error.code || "error"}).`, true);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+function getPrayerDueAt(dateKey, clock, timeZone) {
+    return timeZone
+        ? zonedClockToMillis(dateKey, clock, timeZone)
+        : localClockToMillis(dateKey, clock);
+}
+
+function checkPrayerReminders() {
+    if (!activePrayerUserId || !isValidReligion(activePrayerReligion)) return;
+    if (prayerReminderIsPending()) {
+        forcePauseTimerForPrayer(prayerPending.dueAtMs);
+        if (prayerSessionRestoreReady) tryShowPendingPrayerModal();
+        return;
+    }
+
+    const now = Date.now();
+    if (activePrayerReligion === "muslim") {
+        const minute = Math.floor(now / 60000);
+        if (minute !== prayerNextLabelUpdatedMinute) {
+            prayerNextLabelUpdatedMinute = minute;
+            renderNextPrayerLabel();
+        }
+        const timeZone = prayerTimes?.timeZone || getLocalStudyTimeZone();
+        const today = getStudyDayKey(now, timeZone);
+        if (prayerLastRequestedDate !== today && !prayerFetchInProgress) {
+            loadPrayerTimes();
+        }
+        if (!prayerSettings.enabled || !prayerTimes || prayerTimesStale || prayerTimes.dateKey !== today) return;
+        for (const prayer of MUSLIM_PRAYERS) {
+            const dueAtMs = getPrayerDueAt(today, prayerTimes.timings[prayer.key], prayerTimes.timeZone);
+            const reminderId = `muslim-${prayer.key.toLowerCase()}`;
+            if (now >= dueAtMs && now - dueAtMs <= 120000 &&
+                !prayerReminderWasConfirmed(activePrayerUserId, today, reminderId)) {
+                createPendingPrayerReminder({
+                    id: `${today}|${reminderId}`,
+                    dateKey: today,
+                    reminderId,
+                    kind: "muslim",
+                    prayerName: prayer.name,
+                    dueAtMs
+                });
+                return;
+            }
+        }
+        return;
+    }
+
+    const today = getStudyDayKey(now, getLocalStudyTimeZone());
+    for (const reminder of christianPrayerReminders) {
+        if (reminder.enabled === false || !isValidPrayerTime(reminder.time)) continue;
+        const dueAtMs = localClockToMillis(today, reminder.time);
+        const reminderId = `christian-${reminder.time}`;
+        if (now >= dueAtMs && now - dueAtMs <= 120000 &&
+            !prayerReminderWasConfirmed(activePrayerUserId, today, reminderId)) {
+            createPendingPrayerReminder({
+                id: `${today}|${reminderId}`,
+                dateKey: today,
+                reminderId,
+                kind: "christian",
+                prayerName: reminder.title,
+                dueAtMs
+            });
+            return;
+        }
+    }
+}
+
+function formatPrayerClockForDisplay(timestamp, timeZone, includeSeconds = false) {
+    return new Intl.DateTimeFormat(undefined, {
+        timeZone,
+        hour: "numeric",
+        minute: "2-digit",
+        ...(includeSeconds ? { second: "2-digit" } : {})
+    }).format(new Date(timestamp));
+}
+
+function formatPrayerElapsed(milliseconds) {
+    const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const clock = [hours, minutes, seconds].map(value => String(value).padStart(2, "0")).join(":");
+    return days ? `${days}d ${clock}` : clock;
+}
+
+function isCompletePrayerSchedule(schedule, settings, dayKey) {
+    return schedule?.dateKey === dayKey &&
+        getPrayerLocationKey(schedule.city, schedule.country, schedule.method) ===
+            getPrayerLocationKey(settings.city, settings.country, settings.method) &&
+        typeof schedule.timeZone === "string" &&
+        MUSLIM_PRAYERS.every(prayer => isValidPrayerTime(schedule.timings?.[prayer.key])) &&
+        isValidPrayerTime(schedule.timings?.Sunrise);
+}
+
+async function loadPrayerScheduleForDate(dayKey, settings) {
+    const uid = activePrayerUserId;
+    if (!uid) throw new Error("Sign in to load prayer times.");
+    const cacheKey = prayerDateCacheKey(uid, dayKey, settings);
+    const cached = readLocalJson(cacheKey);
+    if (isCompletePrayerSchedule(cached, settings, dayKey)) return cached;
+
+    const response = await fetchAlAdhanPrayerTimes(dayKey, settings);
+    const schedule = {
+        city: settings.city,
+        country: settings.country,
+        method: settings.method,
+        dateKey: dayKey,
+        timeZone: response.timeZone,
+        timings: response.timings,
+        fetchedAt: Date.now()
+    };
+    try {
+        localStorage.setItem(cacheKey, JSON.stringify(schedule));
+    } catch (error) {
+        console.warn("Could not cache adjacent-day prayer times:", error);
+    }
+    return schedule;
+}
+
+function ensurePrayerBoundaryTimes(today, now) {
+    if (!prayerTimes || prayerTimes.dateKey !== today || prayerTimesStale) return;
+    const uid = activePrayerUserId;
+    if (!uid) return;
+    const settings = getPrayerApiSettings();
+    const fajrAt = zonedClockToMillis(today, prayerTimes.timings.Fajr, prayerTimes.timeZone);
+    const ishaAt = zonedClockToMillis(today, prayerTimes.timings.Isha, prayerTimes.timeZone);
+    const previousDate = now < fajrAt ? shiftPrayerDate(today, -1) : null;
+    const nextDate = now >= ishaAt ? shiftPrayerDate(today, 1) : null;
+    const requestKey = [
+        activePrayerUserId,
+        getPrayerLocationKey(settings.city, settings.country, settings.method),
+        previousDate || "",
+        nextDate || ""
+    ].join("|");
+    if (requestKey === prayerBoundaryRequestKey &&
+        (prayerBoundaryRequest || prayerBoundaryLoadedKey === requestKey ||
+            prayerBoundaryRetryUntil > Date.now())) return;
+
+    prayerBoundaryRequestKey = requestKey;
+    prayerBoundaryLoadedKey = "";
+    prayerBoundaryRetryUntil = 0;
+    prayerBoundaryError = "";
+    prayerYesterdayTimes = null;
+    prayerTomorrowTimes = null;
+    if (!previousDate && !nextDate) {
+        prayerBoundaryLoadedKey = requestKey;
+        return;
+    }
+
+    prayerBoundaryRequest = (async () => {
+        try {
+            const [yesterday, tomorrow] = await Promise.all([
+                previousDate ? loadPrayerScheduleForDate(previousDate, settings) : null,
+                nextDate ? loadPrayerScheduleForDate(nextDate, settings) : null
+            ]);
+            if (requestKey !== prayerBoundaryRequestKey || activePrayerUserId !== uid) return;
+            prayerYesterdayTimes = yesterday;
+            prayerTomorrowTimes = tomorrow;
+            prayerBoundaryLoadedKey = requestKey;
+            updatePrayerPage();
+        } catch (error) {
+            if (requestKey !== prayerBoundaryRequestKey) return;
+            console.error("Could not load adjacent-day prayer times:", error);
+            prayerBoundaryRetryUntil = Date.now() + 5 * 60 * 1000;
+            prayerBoundaryError = "Some previous/next-day times are unavailable. Check your connection and try again.";
+            updatePrayerPage();
+        } finally {
+            if (requestKey === prayerBoundaryRequestKey) prayerBoundaryRequest = null;
+        }
+    })();
+}
+
+function renderPrayerSchedule(schedule, timeZone) {
+    const list = document.getElementById("prayerScheduleList");
+    list.replaceChildren();
+    schedule.forEach(entry => {
+        const row = document.createElement("li");
+        row.className = `prayer-schedule-item ${entry.passed ? "is-passed" : "is-upcoming"}${entry.next ? " is-next" : ""}${entry.informational ? " is-informational" : ""}`;
+        const details = document.createElement("div");
+        details.className = "prayer-schedule-details";
+        const name = document.createElement("strong");
+        name.textContent = entry.informational ? "Sunrise" : MUSLIM_PRAYERS.find(prayer => prayer.key === entry.key)?.display || entry.key;
+        const label = document.createElement("small");
+        label.textContent = entry.informational ? "Informational" : entry.next ? "Next prayer" : entry.passed ? "Passed" : "Upcoming";
+        details.append(name, label);
+        const time = document.createElement("time");
+        time.dateTime = `${entry.dateKey}T${entry.time}`;
+        time.textContent = formatPrayerClockForDisplay(entry.dueAtMs, timeZone);
+        row.append(details, time);
+        list.append(row);
+    });
+}
+
+function updatePrayerPage() {
+    const page = document.getElementById("page-prayers");
+    if (!page || !page.classList.contains("active") || activePrayerReligion !== "muslim") return;
+    const cityLabel = document.getElementById("prayerPageCity");
+    const timezoneLabel = document.getElementById("prayerPageTimezone");
+    const dateLabel = document.getElementById("prayerPageDate");
+    const status = document.getElementById("prayerPageStatus");
+    const scheduleList = document.getElementById("prayerScheduleList");
+    const now = Date.now();
+    const timeZone = prayerTimes?.timeZone || getLocalStudyTimeZone();
+    const today = getStudyDayKey(now, timeZone);
+
+    cityLabel.textContent = `${prayerSettings.city}, ${prayerSettings.country}`;
+    timezoneLabel.textContent = `Times shown in ${timeZone}`;
+    dateLabel.textContent = new Intl.DateTimeFormat(undefined, {
+        timeZone,
+        dateStyle: "full"
+    }).format(new Date(now));
+    document.getElementById("prayerCurrentTime").textContent =
+        formatPrayerClockForDisplay(now, timeZone, true);
+    syncPrayerMethodControl();
+
+    if (!prayerTimes) {
+        status.textContent = document.getElementById("prayerTimesStatus")?.textContent ||
+            "Loading today's prayer schedule…";
+        status.classList.toggle("error", Boolean(document.getElementById("prayerTimesStatus")?.classList.contains("error")));
+        document.getElementById("prayerNextName").textContent = "Unavailable";
+        document.getElementById("prayerNextTime").textContent = "--:--";
+        document.getElementById("prayerNextCountdown").textContent = "--:--:--";
+        document.getElementById("prayerPreviousName").textContent = "Unavailable";
+        document.getElementById("prayerPreviousTime").textContent = "--:--";
+        document.getElementById("prayerSincePrevious").textContent = "--:--:--";
+        scheduleList.replaceChildren();
+        const placeholder = document.createElement("li");
+        placeholder.className = "prayer-schedule-placeholder";
+        placeholder.textContent = "No prayer times are available yet.";
+        scheduleList.append(placeholder);
+        return;
+    }
+
+    if (prayerTimes.dateKey !== today || prayerTimesStale) {
+        status.textContent = document.getElementById("prayerTimesStatus")?.textContent ||
+            "Today's prayer times are being refreshed. The displayed cached schedule may be outdated.";
+        status.classList.add("error");
+        document.getElementById("prayerNextName").textContent = "Updating…";
+        document.getElementById("prayerNextTime").textContent = "--:--";
+        document.getElementById("prayerNextCountdown").textContent = "--:--:--";
+        document.getElementById("prayerPreviousName").textContent = "Updating…";
+        document.getElementById("prayerPreviousTime").textContent = "--:--";
+        document.getElementById("prayerSincePrevious").textContent = "--:--:--";
+        renderPrayerSchedule(
+            buildPrayerTimeline({
+                nowMs: now,
+                dateKey: prayerTimes.dateKey,
+                timeZone: prayerTimes.timeZone,
+                todayTimings: prayerTimes.timings
+            }).schedule,
+            prayerTimes.timeZone
+        );
+        return;
+    }
+
+    ensurePrayerBoundaryTimes(today, now);
+    const timeline = buildPrayerTimeline({
+        nowMs: now,
+        dateKey: today,
+        timeZone,
+        todayTimings: prayerTimes.timings,
+        previousDayTimings: prayerYesterdayTimes?.dateKey === shiftPrayerDate(today, -1)
+            ? prayerYesterdayTimes.timings
+            : null,
+        nextDayTimings: prayerTomorrowTimes?.dateKey === shiftPrayerDate(today, 1)
+            ? prayerTomorrowTimes.timings
+            : null
+    });
+    const apiStatus = document.getElementById("prayerTimesStatus");
+    status.textContent = prayerBoundaryError || apiStatus?.textContent || "Prayer schedule is up to date.";
+    status.classList.toggle("error", Boolean(prayerBoundaryError || apiStatus?.classList.contains("error")));
+    if (timeline.nextPrayer) {
+        const nextName = MUSLIM_PRAYERS.find(prayer => prayer.key === timeline.nextPrayer.key)?.display || timeline.nextPrayer.key;
+        document.getElementById("prayerNextName").textContent =
+            `${nextName}${timeline.nextPrayer.dateKey !== today ? " • Tomorrow" : ""}`;
+        document.getElementById("prayerNextTime").textContent =
+            formatPrayerClockForDisplay(timeline.nextPrayer.dueAtMs, timeZone);
+        document.getElementById("prayerNextCountdown").textContent =
+            formatPrayerElapsed(timeline.nextPrayer.dueAtMs - now);
+    } else {
+        document.getElementById("prayerNextName").textContent =
+            prayerBoundaryRequest ? "Loading tomorrow's Fajr…" : "Next prayer unavailable";
+        document.getElementById("prayerNextTime").textContent = "--:--";
+        document.getElementById("prayerNextCountdown").textContent = "--:--:--";
+    }
+    if (timeline.previousPrayer) {
+        const previousName = MUSLIM_PRAYERS.find(prayer => prayer.key === timeline.previousPrayer.key)?.display || timeline.previousPrayer.key;
+        document.getElementById("prayerPreviousName").textContent =
+            `${previousName}${timeline.previousPrayer.dateKey !== today ? " • Yesterday" : ""}`;
+        document.getElementById("prayerPreviousTime").textContent =
+            formatPrayerClockForDisplay(timeline.previousPrayer.dueAtMs, timeZone);
+        document.getElementById("prayerSincePrevious").textContent =
+            formatPrayerElapsed(now - timeline.previousPrayer.dueAtMs);
+    } else {
+        document.getElementById("prayerPreviousName").textContent =
+            prayerBoundaryRequest ? "Loading yesterday's Isha…" : "Previous prayer unavailable";
+        document.getElementById("prayerPreviousTime").textContent = "--:--";
+        document.getElementById("prayerSincePrevious").textContent = "--:--:--";
+    }
+    renderPrayerSchedule(timeline.schedule, timeZone);
+}
+
+async function selectPrayerCalculationMethod() {
+    const uid = activePrayerUserId;
+    if (!uid || activePrayerReligion !== "muslim") return;
+    const nextMethod = normalizePrayerMethod(document.getElementById("prayerCalculationMethod").value);
+    if (nextMethod === prayerCalculationMethod) return;
+    prayerCalculationMethod = nextMethod;
+    try {
+        localStorage.setItem(prayerMethodKey(uid), JSON.stringify(nextMethod));
+    } catch (error) {
+        console.warn("Could not persist the selected prayer calculation method:", error);
+        setPrayerStatus("Method changed for this session, but this browser could not save the preference.", true);
+    }
+    prayerFetchToken += 1;
+    prayerFetchInProgress = false;
+    prayerLastRequestedDate = null;
+    prayerTimes = null;
+    prayerTimesStale = false;
+    resetPrayerBoundaryState();
+    const pageStatus = document.getElementById("prayerPageStatus");
+    pageStatus.textContent = "Loading times for the selected calculation method…";
+    pageStatus.classList.remove("error");
+    renderPrayerTimes();
+    updatePrayerPage();
+    await loadPrayerTimes(true);
+}
+
+document.getElementById("saveMuslimPrayerSettings")?.addEventListener("click", saveMuslimPrayerSettings);
+document.getElementById("christianPrayerReminderForm")?.addEventListener("submit", saveChristianPrayerReminder);
+document.getElementById("cancelChristianPrayerEdit")?.addEventListener("click", resetChristianReminderForm);
+document.getElementById("prayerCalculationMethod")?.addEventListener("change", selectPrayerCalculationMethod);
 
 /* EXTERNAL PROFILE PHOTO URL: no Firebase Storage required */
 
@@ -843,17 +2244,103 @@ async function respondToFriendRequest(requestId, status) {
 
 
 /* FRIEND PROFILE POPUP + FAVORITES + REMOVE + LEAGUE INVITE */
+let friendStudyStatsUnsubscribers = [];
+let friendStudyStatsRefreshTimer = null;
+let friendStudyStatsToken = 0;
+
+function stopFriendStudyStats() {
+    friendStudyStatsUnsubscribers.forEach(unsubscribe => unsubscribe());
+    friendStudyStatsUnsubscribers = [];
+    if (friendStudyStatsRefreshTimer) clearTimeout(friendStudyStatsRefreshTimer);
+    friendStudyStatsRefreshTimer = null;
+    friendStudyStatsToken += 1;
+}
+
+function closeFriendProfileModal() {
+    const modal = document.getElementById("friendProfileModal");
+    if (modal) modal.hidden = true;
+    stopFriendStudyStats();
+}
+
+function renderFriendStudyStats(stats, timeZone) {
+    const statsBox = document.getElementById("friendProfileStats");
+    const todayElement = document.getElementById("friendProfileToday");
+    const weekElement = document.getElementById("friendProfileWeek");
+    const history = document.getElementById("friendProfileStudyHistory");
+    if (!statsBox || !history) return;
+
+    statsBox.replaceChildren();
+    const cards = [
+        [formatStudyDuration(stats.totalSeconds), "TOTAL STUDY TIME"],
+        [String(stats.completedSessions), "COMPLETED SESSIONS"],
+        [String(stats.currentStreak), "CURRENT STREAK"],
+        [`${stats.longestStreak} days`, "LONGEST STREAK"],
+        [String(stats.studyDays), "STUDY DAYS"]
+    ];
+    cards.forEach(([value, label]) => {
+        const card = document.createElement("div");
+        card.className = "friend-stat-card";
+        const amount = document.createElement("strong");
+        amount.textContent = value;
+        const caption = document.createElement("span");
+        caption.textContent = label;
+        card.append(amount, caption);
+        statsBox.append(card);
+    });
+
+    if (todayElement) todayElement.textContent = formatStudyDuration(stats.todaySeconds);
+    if (weekElement) weekElement.textContent = formatStudyDuration(stats.weeklySeconds);
+    renderStudySessionHistory(history, stats.records, timeZone);
+}
+
+async function refreshFriendStudyStats(person, token) {
+    const [sessionsSnapshot, roomSessionsSnapshot] = await Promise.all([
+        getDocs(query(collection(db, "studySessions"), where("uid", "==", person.uid))),
+        getDocs(query(collection(db, "studyRoomCompletions"), where("uid", "==", person.uid)))
+    ]);
+    if (token !== friendStudyStatsToken) return;
+    const records = normalizeStudyRecords(sessionsSnapshot.docs, roomSessionsSnapshot.docs, person.uid);
+    const stats = calculateStudyStatistics(records, person.studyTimeZone || "UTC");
+    renderFriendStudyStats(stats, person.studyTimeZone || "UTC");
+}
+
+function watchFriendStudyStats(person) {
+    stopFriendStudyStats();
+    const token = friendStudyStatsToken;
+    const refresh = () => {
+        if (friendStudyStatsRefreshTimer) clearTimeout(friendStudyStatsRefreshTimer);
+        friendStudyStatsRefreshTimer = setTimeout(() => {
+            refreshFriendStudyStats(person, token).catch(error => {
+                if (token !== friendStudyStatsToken) return;
+                console.error("Could not load friend study stats:", error);
+                const history = document.getElementById("friendProfileStudyHistory");
+                if (history) history.textContent = "Study statistics are unavailable right now.";
+            });
+        }, 100);
+    };
+    friendStudyStatsUnsubscribers = [
+        onSnapshot(query(collection(db, "studySessions"), where("uid", "==", person.uid)), refresh, error => {
+            console.error("Friend study-session updates failed:", error);
+        }),
+        onSnapshot(query(collection(db, "studyRoomCompletions"), where("uid", "==", person.uid)), refresh, error => {
+            console.error("Friend Study Session updates failed:", error);
+        })
+    ];
+    refresh();
+}
+
 function ensureFriendProfileModal() {
     let modal = document.getElementById("friendProfileModal");
     if (modal) return modal;
     modal = document.createElement("div"); modal.id = "friendProfileModal"; modal.className = "friend-profile-modal"; modal.hidden = true;
-    modal.innerHTML = `<div class="friend-profile-backdrop" data-close-friend-profile></div><section class="friend-profile-card" role="dialog" aria-modal="true" aria-labelledby="friendProfileName"><button class="friend-profile-close" type="button" data-close-friend-profile aria-label="Close">×</button><div id="friendProfileCover" class="friend-profile-cover"></div><div id="friendProfileAvatar" class="friend-profile-avatar"></div><h3 id="friendProfileName">Friend</h3><p id="friendProfileUsername"></p><div id="friendProfileStats" class="friend-profile-stats"><div class="friend-stat-card"><strong>—</strong><span>STUDY HOURS</span></div><div class="friend-stat-card"><strong>—</strong><span>DAY STREAK 🔥</span></div><div class="friend-stat-card"><strong>—</strong><span>SESSIONS</span></div><div class="friend-stat-card"><strong>—</strong><span>BEST STREAK</span></div></div><div class="friend-profile-actions"><button id="friendProfileFavorite" class="community-action-btn" type="button">☆ FAVORITE</button><button id="friendProfileRemove" class="mini-action danger-action" type="button">REMOVE FRIEND</button></div><div class="friend-profile-invite"><label for="friendInviteLeague">Invite to a league</label><select id="friendInviteLeague"><option value="">Loading your leagues...</option></select><button id="friendInviteCopy" class="community-action-btn" type="button">COPY INVITE CODE</button><p id="friendInviteStatus" class="community-note"></p></div></section>`;
+    modal.innerHTML = `<div class="friend-profile-backdrop" data-close-friend-profile></div><section class="friend-profile-card" role="dialog" aria-modal="true" aria-labelledby="friendProfileName"><button class="friend-profile-close" type="button" data-close-friend-profile aria-label="Close">×</button><div id="friendProfileCover" class="friend-profile-cover"></div><div id="friendProfileAvatar" class="friend-profile-avatar"></div><h3 id="friendProfileName">Friend</h3><p id="friendProfileUsername"></p><div id="friendProfileStats" class="friend-profile-stats"></div><p class="friend-profile-daily">Today: <strong id="friendProfileToday">0s</strong> · Last 7 days: <strong id="friendProfileWeek">0s</strong></p><section class="friend-profile-history"><h4>Study Sessions</h4><div id="friendProfileStudyHistory" class="study-session-history">Loading study history...</div></section><div class="friend-profile-actions"><button id="friendProfileFavorite" class="community-action-btn" type="button">☆ FAVORITE</button><button id="friendProfileRemove" class="mini-action danger-action" type="button">REMOVE FRIEND</button></div><div class="friend-profile-invite"><label for="friendInviteLeague">Invite to a league</label><select id="friendInviteLeague"><option value="">Loading your leagues...</option></select><button id="friendInviteCopy" class="community-action-btn" type="button">COPY INVITE CODE</button><p id="friendInviteStatus" class="community-note"></p></div></section>`;
     document.body.append(modal);
-    modal.addEventListener("click", event => { if (event.target.closest("[data-close-friend-profile]")) modal.hidden = true; });
+    modal.addEventListener("click", event => { if (event.target.closest("[data-close-friend-profile]")) closeFriendProfileModal(); });
     return modal;
 }
 
 async function openFriendProfile(person, favorite) {
+    stopFriendStudyStats();
     const modal = ensureFriendProfileModal();
     modal.hidden = false;
     const cover = document.getElementById("friendProfileCover");
@@ -869,40 +2356,14 @@ async function openFriendProfile(person, favorite) {
     avatar.classList.toggle("owner-avatar", person.isOwner === true);
     document.getElementById("friendProfileUsername").textContent = `@${person.username || "member"}`;
     const statsBox = document.getElementById("friendProfileStats");
-    statsBox.innerHTML = '<div class="friend-stat-card"><strong>...</strong><span>STUDY HOURS</span></div><div class="friend-stat-card"><strong>...</strong><span>DAY STREAK 🔥</span></div><div class="friend-stat-card"><strong>...</strong><span>SESSIONS</span></div><div class="friend-stat-card"><strong>...</strong><span>BEST STREAK</span></div>';
-    try {
-        const sessionsSnap = await getDocs(query(collection(db, "studySessions"), where("uid", "==", person.uid)));
-        const completed = sessionsSnap.docs.map(item => item.data()).filter(item => item.status === "completed");
-        const totalSeconds = completed.reduce((sum, item) => sum + Math.max(0, Number(item.durationSeconds) || 0), 0);
-        const countdownSeconds = completed.filter(item => item.mode === "countdown").reduce((sum, item) => sum + Math.max(0, Number(item.durationSeconds) || 0), 0);
-        const stopwatchSeconds = completed.filter(item => item.mode === "stopwatch").reduce((sum, item) => sum + Math.max(0, Number(item.durationSeconds) || 0), 0);
-        const dayKeys = [...new Set(completed.map(item => {
-            const stamp = item.startedAt?.toDate?.() || (item.startedAt?.toMillis ? new Date(item.startedAt.toMillis()) : null);
-            return stamp && !Number.isNaN(stamp.getTime()) ? `${stamp.getFullYear()}-${stamp.getMonth()}-${stamp.getDate()}` : null;
-        }).filter(Boolean))];
-        const daySet = new Set(dayKeys);
-        const today = new Date(); today.setHours(0,0,0,0);
-        const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
-        const keyOf = date => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-        let currentStreak = 0;
-        let cursor = daySet.has(keyOf(today)) ? today : (daySet.has(keyOf(yesterday)) ? yesterday : null);
-        while (cursor && daySet.has(keyOf(cursor))) { currentStreak++; cursor = new Date(cursor); cursor.setDate(cursor.getDate() - 1); }
-        const dates = dayKeys.map(key => { const [y,m,d] = key.split("-").map(Number); return new Date(y,m,d); }).sort((a,b) => a-b);
-        let bestStreak = 0, run = 0, previous = null;
-        dates.forEach(date => {
-            if (previous) { const diff = Math.round((date - previous) / 86400000); run = diff === 1 ? run + 1 : 1; }
-            else run = 1;
-            bestStreak = Math.max(bestStreak, run); previous = date;
-        });
-        const hours = (totalSeconds / 3600).toFixed(totalSeconds >= 36000 ? 0 : 1);
-        statsBox.innerHTML = `<div class="friend-stat-card"><strong>${formatStudyTotal(totalSeconds)}</strong><span>TOTAL STUDY TIME</span></div><div class="friend-stat-card"><strong>${formatStudyTotal(countdownSeconds)}</strong><span>COUNTDOWN</span></div><div class="friend-stat-card"><strong>${formatStudyTotal(stopwatchSeconds)}</strong><span>STOPWATCH</span></div><div class="friend-stat-card"><strong>${currentStreak} 🔥</strong><span>DAY STREAK</span></div><div class="friend-stat-card"><strong>${completed.length}</strong><span>SESSIONS</span></div><div class="friend-stat-card"><strong>${bestStreak} days</strong><span>BEST STREAK</span></div>`;
-    } catch (error) {
-        console.error("Could not load friend study stats:", error);
-        statsBox.innerHTML = '<p class="community-note">Study statistics are unavailable right now.</p>';
-    }
+    statsBox.textContent = "Loading study statistics...";
+    document.getElementById("friendProfileToday").textContent = "—";
+    document.getElementById("friendProfileWeek").textContent = "—";
+    document.getElementById("friendProfileStudyHistory").textContent = "Loading study history...";
+    watchFriendStudyStats(person);
     const fav = document.getElementById("friendProfileFavorite"); fav.textContent = favorite ? "★ FAVORITED" : "☆ ADD TO FAVORITES";
-    fav.onclick = async () => { await toggleFriendFavorite(person.uid, !favorite); modal.hidden = true; };
-    document.getElementById("friendProfileRemove").onclick = async () => { if (await appConfirm(`Remove ${person.username || "this friend"} from your friends?`)) { await removeFriend(person.uid); modal.hidden = true; } };
+    fav.onclick = async () => { await toggleFriendFavorite(person.uid, !favorite); closeFriendProfileModal(); };
+    document.getElementById("friendProfileRemove").onclick = async () => { if (await appConfirm(`Remove ${person.username || "this friend"} from your friends?`)) { await removeFriend(person.uid); closeFriendProfileModal(); } };
     const select = document.getElementById("friendInviteLeague"); select.replaceChildren();
     const placeholder = document.createElement("option"); placeholder.value = ""; placeholder.textContent = "Choose a league"; select.append(placeholder);
     try {
@@ -1149,10 +2610,18 @@ function getPausedMilliseconds(session, now = Date.now()) {
 function saveLocalSession() {
     const user = auth.currentUser;
     if (!user || !activeSession) return;
+    if (activeSession.status === "running" && prayerReminderIsPending()) {
+        forcePauseTimerForPrayer(prayerPending.dueAtMs);
+        return;
+    }
     localStorage.setItem(getTimerStorageKey(user.uid), JSON.stringify(activeSession));
 }
 
 function setTimerMode(mode) {
+    if (prayerReminderIsPending()) {
+        setTimerMessage("Confirm the prayer reminder before changing timer modes.", true);
+        return;
+    }
     if (activeSession) {
         setTimerMessage("Finish or reset the current session before switching modes.", true);
         return;
@@ -1338,6 +2807,10 @@ function applyTimerSettings() {
 
 function updateTimerDisplay() {
     if (!activeSession) return;
+    if (activeSession.status === "running" && prayerReminderIsPending()) {
+        forcePauseTimerForPrayer(prayerPending.dueAtMs);
+        return;
+    }
     if (activeSession.status !== "running") stopTimerTicker();
 
     const wasBreakDue = Boolean(activeSession.breakDue);
@@ -1402,6 +2875,7 @@ function updateTimerDisplay() {
 
 function renderTimerControls() {
     const hasSession = Boolean(activeSession);
+    const prayerPendingActive = prayerReminderIsPending();
     const isPaused = activeSession?.status === "paused";
     const isSaving = activeSession?.status === "saving";
     const isRunning = activeSession?.status === "running";
@@ -1420,24 +2894,31 @@ function renderTimerControls() {
         activeSession.status !== "break-finished";
     timerAddTimeControl.hidden = !canAdjustTime;
     timerAddTimeCustomInput.hidden = timerAddTimeSelect.value !== "custom";
-    timerFinishBtn.disabled = isSaving;
-    timerResetBtn.disabled = isSaving;
-    timerStartBreakBtn.disabled = isSaving;
-    timerStartStudyBtn.disabled = isSaving;
-    timerAddTimeBtn.disabled = isSaving;
+    timerStartBtn.disabled = startingSession || prayerPendingActive;
+    timerPauseBtn.disabled = prayerPendingActive;
+    timerResumeBtn.disabled = prayerPendingActive;
+    timerFinishBtn.disabled = isSaving || prayerPendingActive;
+    timerResetBtn.disabled = isSaving || prayerPendingActive;
+    timerStartBreakBtn.disabled = isSaving || prayerPendingActive;
+    timerStartStudyBtn.disabled = isSaving || prayerPendingActive;
+    timerAddTimeBtn.disabled = isSaving || prayerPendingActive;
 
-    countdownModeBtn.disabled = hasSession;
-    stopwatchModeBtn.disabled = hasSession;
-    timerHoursInput.disabled = isSaving;
-    timerMinutesInput.disabled = isSaving;
-    timerSecondsInput.disabled = isSaving;
-    timerBreakIntervalHoursInput.disabled = isSaving;
-    timerBreakIntervalMinutesInput.disabled = isSaving;
-    timerBreakMinutesInput.disabled = isSaving;
+    countdownModeBtn.disabled = hasSession || prayerPendingActive;
+    stopwatchModeBtn.disabled = hasSession || prayerPendingActive;
+    timerHoursInput.disabled = isSaving || prayerPendingActive;
+    timerMinutesInput.disabled = isSaving || prayerPendingActive;
+    timerSecondsInput.disabled = isSaving || prayerPendingActive;
+    timerBreakIntervalHoursInput.disabled = isSaving || prayerPendingActive;
+    timerBreakIntervalMinutesInput.disabled = isSaving || prayerPendingActive;
+    timerBreakMinutesInput.disabled = isSaving || prayerPendingActive;
 }
 
 function startTimerTicker() {
     stopTimerTicker();
+    if (activeSession?.status === "running" && prayerReminderIsPending()) {
+        forcePauseTimerForPrayer(prayerPending.dueAtMs);
+        return;
+    }
     updateTimerDisplay();
     if (activeSession?.status === "running") timerInterval = setInterval(updateTimerDisplay, 250);
 }
@@ -1451,6 +2932,10 @@ function stopTimerTicker() {
 
 async function startStudySession() {
     const user = auth.currentUser;
+    if (prayerReminderIsPending()) {
+        setTimerMessage("Confirm the prayer reminder before starting a study session.", true);
+        return;
+    }
     if (!user) {
         setTimerMessage("Please log in before starting a study session.", true);
         return;
@@ -1527,6 +3012,7 @@ async function startStudySession() {
 }
 
 function startManualBreak() {
+    if (prayerReminderIsPending()) return;
     const now = Date.now();
     if (!beginManualBreak(activeSession, now)) {
         updateTimerDisplay();
@@ -1541,6 +3027,7 @@ function startManualBreak() {
 }
 
 function startManualStudy() {
+    if (prayerReminderIsPending()) return;
     if (!beginManualStudy(activeSession)) return;
 
     saveLocalSession();
@@ -1551,6 +3038,7 @@ function startManualStudy() {
 }
 
 function addSelectedTime() {
+    if (prayerReminderIsPending()) return;
     if (!activeSession || !["running", "paused"].includes(activeSession.status)) return;
 
     const selectedValue = timerAddTimeSelect.value;
@@ -1588,6 +3076,7 @@ function addSelectedTime() {
 }
 
 function pauseStudySession() {
+    if (prayerReminderIsPending()) return;
     if (!activeSession || activeSession.status !== "running") return;
 
     const now = Date.now();
@@ -1612,6 +3101,10 @@ function pauseStudySession() {
 }
 
 function resumeStudySession() {
+    if (prayerReminderIsPending()) {
+        setTimerMessage("Confirm the prayer reminder before resuming the timer.", true);
+        return;
+    }
     if (!activeSession || activeSession.status !== "paused") return;
 
     const now = Date.now();
@@ -1633,6 +3126,10 @@ function resumeStudySession() {
 }
 
 async function finishStudySession() {
+    if (prayerReminderIsPending()) {
+        setTimerMessage("Confirm the prayer reminder before finishing this session.", true);
+        return;
+    }
     if (!activeSession || finishingSession) return;
 
     const session = activeSession;
@@ -1701,6 +3198,10 @@ async function finishStudySession() {
 }
 
 async function resetStudySession() {
+    if (prayerReminderIsPending()) {
+        setTimerMessage("Confirm the prayer reminder before resetting this session.", true);
+        return;
+    }
     if (!activeSession) return;
 
     const confirmed = await appConfirm("Reset this session? Its current study time will not be saved.");
@@ -1728,6 +3229,7 @@ async function restoreStudySession(uid) {
         activeSession = null;
         renderTimerControls();
         setTimerMode("countdown");
+        markPrayerSessionRestoreReady(uid);
         return;
     }
 
@@ -1743,10 +3245,15 @@ async function restoreStudySession(uid) {
             activeSession = null;
             renderTimerControls();
             setTimerMode("countdown");
+            markPrayerSessionRestoreReady(uid);
             return;
         }
 
-        const now = Date.now();
+        const actualNow = Date.now();
+        const pendingPrayer = readPrayerPending(uid);
+        const now = pendingPrayer
+            ? Math.min(actualNow, Number(pendingPrayer.dueAtMs) || actualNow)
+            : actualNow;
         const hasManualTimerState = ["study", "break"].includes(saved.phase) &&
             Number.isInteger(Number(saved.studyDurationSeconds)) &&
             Number(saved.studyDurationSeconds) >= 1 && Number(saved.studyDurationSeconds) <= 86400 &&
@@ -1836,6 +3343,9 @@ async function restoreStudySession(uid) {
         }
 
         activeSession = saved;
+        if (prayerReminderIsPending() && activeSession.status === "running") {
+            forcePauseTimerForPrayer(prayerPending.dueAtMs);
+        }
         timerMode = saved.mode;
         saveTimerSettings(uid, {
             studyDurationSeconds: saved.studyDurationSeconds,
@@ -1865,12 +3375,14 @@ async function restoreStudySession(uid) {
             }
         }
         renderTimerControls();
+        markPrayerSessionRestoreReady(uid);
     } catch (error) {
         console.error("Could not restore study session:", error);
         localStorage.removeItem(getTimerStorageKey(uid));
         activeSession = null;
         renderTimerControls();
         setTimerMode("countdown");
+        markPrayerSessionRestoreReady(uid);
     }
 }
 
@@ -1916,72 +3428,108 @@ if (resetStudyStatsBtn) {
     });
 }
 
-/* LOAD STUDY TOTALS FROM FIRESTORE */
+/* All displayed totals derive from the same completed Firestore records. */
+let studyStatsDayInterval = null;
+let studyStatsDayUid = null;
+let studyStatsCurrentDay = null;
+
+function ensureStudyStatsDayRefresh(uid, timeZone) {
+    if (studyStatsDayUid === uid && studyStatsDayInterval) return;
+    if (studyStatsDayInterval) clearInterval(studyStatsDayInterval);
+    studyStatsDayUid = uid;
+    studyStatsCurrentDay = getStudyDayKey(Date.now(), timeZone);
+    studyStatsDayInterval = setInterval(() => {
+        if (auth.currentUser?.uid !== uid) return;
+        const day = getStudyDayKey(Date.now(), timeZone);
+        if (day === studyStatsCurrentDay) return;
+        studyStatsCurrentDay = day;
+        loadStudyStats(uid);
+    }, 60000);
+}
+
+async function fetchStudyRecords(uid) {
+    const [sessionsSnapshot, roomSessionsSnapshot] = await Promise.all([
+        getDocs(query(collection(db, "studySessions"), where("uid", "==", uid))),
+        getDocs(query(collection(db, "studyRoomCompletions"), where("uid", "==", uid)))
+    ]);
+    return normalizeStudyRecords(sessionsSnapshot.docs, roomSessionsSnapshot.docs, uid);
+}
+
+function renderStudySessionHistory(container, records, timeZone) {
+    if (!container) return;
+    container.replaceChildren();
+    if (!records.length) {
+        container.textContent = "No completed study sessions yet.";
+        return;
+    }
+
+    records.forEach(record => {
+        const row = document.createElement("div");
+        row.className = "study-history-row";
+        const date = document.createElement("span");
+        date.textContent = formatStudyDate(record.endedAtMillis, timeZone);
+        const duration = document.createElement("strong");
+        duration.textContent = formatStudyDuration(record.durationSeconds);
+        row.append(date, duration);
+        container.append(row);
+    });
+}
+
 async function loadStudyStats(uid) {
     try {
-        const sessionsQuery = query(
-            collection(db, "studySessions"),
-            where("uid", "==", uid)
-        );
-        const [snapshot, roomSessionsSnapshot] = await Promise.all([
-            getDocs(sessionsQuery),
-            getDocs(query(
-                collection(db, "studyRoomCompletions"),
-                where("uid", "==", uid)
-            ))
-        ]);
-
-        let totalSeconds = 0;
-        let countdownSeconds = 0;
-        let stopwatchSeconds = 0;
-        let studySessionSeconds = 0;
-        let completedCount = 0;
-
-        snapshot.forEach(sessionDoc => {
-            const data = sessionDoc.data();
-            if (data.status === "completed") {
-                const seconds = Math.max(0, Number(data.durationSeconds) || 0);
-                totalSeconds += seconds;
-                if (data.mode === "countdown") countdownSeconds += seconds;
-                if (data.mode === "stopwatch") stopwatchSeconds += seconds;
-                completedCount++;
-            }
-        });
-
-        roomSessionsSnapshot.forEach(roomSessionDoc => {
-            const seconds = Math.max(0, Number(roomSessionDoc.data().durationSeconds) || 0);
-            studySessionSeconds += seconds;
-            totalSeconds += seconds;
-            completedCount++;
-        });
-
-        const formatted = formatStudyTotal(totalSeconds);
-
-        // Update only elements that actually exist on the current page.
+        const records = await fetchStudyRecords(uid);
+        if (auth.currentUser?.uid !== uid) return null;
+        const timeZone = currentProfile?.studyTimeZone || getLocalStudyTimeZone();
+        ensureStudyStatsDayRefresh(uid, timeZone);
+        const stats = calculateStudyStatistics(records, timeZone);
+        const statsError = document.getElementById("studyStatsError");
+        if (statsError) {
+            statsError.hidden = true;
+            statsError.textContent = "";
+        }
         const totalStudyTimeEl = document.getElementById("totalStudyTime");
         const completedSessionsEl = document.getElementById("completedSessions");
-        const profileStudyTimeEl = document.getElementById("profileStudyTime");
-        const profileSessionCountEl = document.getElementById("profileSessionCount");
-        const profileCountdownTimeEl = document.getElementById("profileCountdownTime");
-        const profileStopwatchTimeEl = document.getElementById("profileStopwatchTime");
-        const profileStudySessionTimeEl = document.getElementById("profileStudySessionTime");
 
-        if (totalStudyTimeEl) totalStudyTimeEl.textContent = formatted;
-        if (completedSessionsEl) completedSessionsEl.textContent = `${completedCount} completed sessions`;
-        if (profileStudyTimeEl) profileStudyTimeEl.textContent = formatted;
-        if (profileSessionCountEl) profileSessionCountEl.textContent = completedCount;
-        if (profileCountdownTimeEl) profileCountdownTimeEl.textContent = formatStudyTotal(countdownSeconds);
-        if (profileStopwatchTimeEl) profileStopwatchTimeEl.textContent = formatStudyTotal(stopwatchSeconds);
-        if (profileStudySessionTimeEl) profileStudySessionTimeEl.textContent = formatStudyTotal(studySessionSeconds);
+        if (totalStudyTimeEl) totalStudyTimeEl.textContent = formatStudyDuration(stats.totalSeconds);
+        if (completedSessionsEl) completedSessionsEl.textContent = `${stats.completedSessions} completed sessions`;
+        const values = {
+            streakValue: stats.currentStreak,
+            longestStreakValue: stats.longestStreak,
+            studyDaysValue: stats.studyDays,
+            profileStudyTime: formatStudyDuration(stats.totalSeconds),
+            profileSessionCount: stats.completedSessions,
+            profileCountdownTime: formatStudyDuration(stats.countdownSeconds),
+            profileStopwatchTime: formatStudyDuration(stats.stopwatchSeconds),
+            profileStudySessionTime: formatStudyDuration(stats.studyRoomSeconds),
+            profileCurrentStreak: stats.currentStreak,
+            profileLongestStreak: stats.longestStreak,
+            profileStudyDays: stats.studyDays,
+            profileTodayStudyTime: formatStudyDuration(stats.todaySeconds),
+            profileWeekStudyTime: formatStudyDuration(stats.weeklySeconds)
+        };
+        Object.entries(values).forEach(([id, value]) => {
+            const element = document.getElementById(id);
+            if (element) element.textContent = String(value);
+        });
+        renderStudySessionHistory(document.getElementById("profileStudyHistory"), stats.records, timeZone);
+        return stats;
     } catch (error) {
+        if (auth.currentUser?.uid !== uid) return null;
         console.error("Could not load study statistics:", {
             code: error.code || "unknown",
             message: error.message || String(error),
             error
         });
         const errorCode = error.code || "unknown-error";
-        const errorMessage = error.message || "No additional details were provided.";
-        setTimerMessage(`Could not load study statistics (${errorCode}): ${errorMessage}`, true);
+        const statsError = document.getElementById("studyStatsError");
+        if (statsError) {
+            statsError.textContent = `Study statistics could not be loaded (${errorCode}). Check your connection or Firestore access and retry.`;
+            statsError.hidden = false;
+        }
+        const history = document.getElementById("profileStudyHistory");
+        if (history) history.textContent = `Study history is unavailable (${errorCode}).`;
+        setTimerMessage(`Could not load study statistics (${errorCode}).`, true);
+        return null;
     }
 }
 
@@ -1992,6 +3540,8 @@ let studyInviteUnsubscribe = null;
 let activeStudyRoomUnsubscribe = null;
 let activeStudyRoomRemovalUnsubscribe = null;
 let studyRoomStatsUnsubscribe = null;
+let studySessionStatsUnsubscribe = null;
+let studyStatsRefreshTimer = null;
 let activeStudyRoomId = null;
 let activeStudyRoomData = null;
 let studyRoomTicker = null;
@@ -2075,12 +3625,19 @@ async function initStudyRooms(uid) {
     if (studyRoomUnsubscribe) studyRoomUnsubscribe();
     if (studyInviteUnsubscribe) studyInviteUnsubscribe();
     if (studyRoomStatsUnsubscribe) studyRoomStatsUnsubscribe();
+    if (studySessionStatsUnsubscribe) studySessionStatsUnsubscribe();
+    const refreshStudyStats = () => {
+        if (studyStatsRefreshTimer) clearTimeout(studyStatsRefreshTimer);
+        studyStatsRefreshTimer = setTimeout(() => loadStudyStats(uid), 100);
+    };
     studyRoomStatsUnsubscribe = onSnapshot(query(
         collection(db, "studyRoomCompletions"),
         where("uid", "==", uid)
-    ), () => {
-        loadStudyStats(uid);
-    }, error => console.error("Study Session stats sync failed:", error));
+    ), refreshStudyStats, error => console.error("Study Session stats sync failed:", error));
+    studySessionStatsUnsubscribe = onSnapshot(query(
+        collection(db, "studySessions"),
+        where("uid", "==", uid)
+    ), refreshStudyStats, error => console.error("Study timer stats sync failed:", error));
     studyRoomUnsubscribe = onSnapshot(query(collection(db, "studyRooms"), where("memberUids", "array-contains", uid)), snap => {
         const list = document.getElementById("myStudyRoomsList");
         if (!list) return;
@@ -2942,6 +4499,7 @@ function formatChallengeTime(seconds) {
 
 async function loadCommunityFeatures(uid) {
     await Promise.all([loadWeeklyLeaderboard(uid)]);
+    initStudyLeaderboardUpdates(uid);
     await initStudyRooms(uid);
     await Promise.all([loadMyLeagues(), loadTodoList()]);
 }
@@ -3029,20 +4587,32 @@ async function joinChallenge(uid, challenge) {
 async function loadWeeklyLeaderboard(currentUid) {
     const list = document.getElementById("leaderboardList");
     try {
-        const snapshot = await getDocs(collection(db, "studySessions"));
-        const members = new Map();
-        snapshot.forEach(item => {
+        const [sessionsSnapshot, roomSessionsSnapshot, profilesSnapshot] = await Promise.all([
+            getDocs(collection(db, "studySessions")),
+            getDocs(collection(db, "studyRoomCompletions")),
+            getDocs(collection(db, "publicProfiles"))
+        ]);
+        const records = normalizeStudyRecords(sessionsSnapshot.docs, roomSessionsSnapshot.docs);
+        const sessionNames = new Map();
+        sessionsSnapshot.forEach(item => {
             const data = item.data();
-            if (data.status !== "completed" || !data.uid) return;
-            const member = members.get(data.uid) || { uid: data.uid, username: data.username || (data.uid === currentUid ? currentProfile?.username : "Community Member") || "Community Member", seconds: 0, countdownSeconds: 0, stopwatchSeconds: 0 };
-            const sessionSeconds = Math.max(0, Number(data.durationSeconds) || 0);
-            member.seconds += sessionSeconds;
-            if (data.mode === "countdown") member.countdownSeconds += sessionSeconds;
-            if (data.mode === "stopwatch") member.stopwatchSeconds += sessionSeconds;
-            if (data.username) member.username = data.username;
-            members.set(data.uid, member);
+            if (data.uid && data.username) sessionNames.set(data.uid, data.username);
         });
-        const ranked = [...members.values()].sort((a, b) => b.seconds - a.seconds).slice(0, 10);
+        const profiles = new Map(profilesSnapshot.docs.map(item => [item.id, item.data()]));
+        const recordsByUser = new Map();
+        records.forEach(record => {
+            if (!recordsByUser.has(record.uid)) recordsByUser.set(record.uid, []);
+            recordsByUser.get(record.uid).push(record);
+        });
+        const ranked = [...recordsByUser.entries()].map(([uid, userRecords]) => {
+            const profile = profiles.get(uid) || {};
+            const stats = calculateStudyStatistics(userRecords, profile.studyTimeZone || "UTC");
+            return {
+                uid,
+                username: profile.username || sessionNames.get(uid) || (uid === currentUid ? currentProfile?.username : "Community Member") || "Community Member",
+                stats
+            };
+        }).sort((a, b) => b.stats.totalSeconds - a.stats.totalSeconds || a.username.localeCompare(b.username)).slice(0, 10);
         list.replaceChildren();
         if (!ranked.length) {
             const empty = document.createElement("p");
@@ -3064,8 +4634,8 @@ async function loadWeeklyLeaderboard(currentUid) {
             left.append(rank, name);
             const time = document.createElement("strong");
             time.className = "leaderboard-time";
-            time.textContent = `${formatChallengeTime(member.seconds)}  |  ⏳ ${formatChallengeTime(member.countdownSeconds)}  |  ⏱ ${formatChallengeTime(member.stopwatchSeconds)}`;
-            time.title = "Total study time | Countdown | Stopwatch";
+            time.textContent = `${formatStudyDuration(member.stats.totalSeconds)} total`;
+            time.title = `${member.stats.completedSessions} completed sessions · ${member.stats.studyDays} study days`;
             row.append(left, time);
             list.append(row);
         });
@@ -3073,6 +4643,34 @@ async function loadWeeklyLeaderboard(currentUid) {
         console.error("Could not load leaderboard:", error);
         list.textContent = "Could not load leaderboard. Check Firestore Rules.";
     }
+}
+
+let studyLeaderboardUnsubscribers = [];
+let studyLeaderboardUid = null;
+let studyLeaderboardRefreshTimer = null;
+
+function stopStudyLeaderboardUpdates() {
+    studyLeaderboardUnsubscribers.forEach(unsubscribe => unsubscribe());
+    studyLeaderboardUnsubscribers = [];
+    studyLeaderboardUid = null;
+    if (studyLeaderboardRefreshTimer) clearTimeout(studyLeaderboardRefreshTimer);
+    studyLeaderboardRefreshTimer = null;
+}
+
+function initStudyLeaderboardUpdates(uid) {
+    if (studyLeaderboardUid === uid && studyLeaderboardUnsubscribers.length) return;
+    stopStudyLeaderboardUpdates();
+    studyLeaderboardUid = uid;
+    const refresh = () => {
+        if (studyLeaderboardRefreshTimer) clearTimeout(studyLeaderboardRefreshTimer);
+        studyLeaderboardRefreshTimer = setTimeout(() => {
+            if (auth.currentUser?.uid === uid) loadWeeklyLeaderboard(uid);
+        }, 150);
+    };
+    studyLeaderboardUnsubscribers = [
+        onSnapshot(collection(db, "studySessions"), refresh, error => console.error("Leaderboard timer updates failed:", error)),
+        onSnapshot(collection(db, "studyRoomCompletions"), refresh, error => console.error("Leaderboard Study Session updates failed:", error))
+    ];
 }
 
 
@@ -3192,7 +4790,7 @@ async function loadLeagueRanking() {
     if (!activeLeagueData || !list) return;
     list.textContent = "Calculating all-time study totals...";
     try {
-        const members = new Map((activeLeagueData.memberUids || []).map(uid => [uid, { uid, username: "Member", seconds: 0, countdownSeconds: 0, stopwatchSeconds: 0, studySessionSeconds: 0 }]));
+        const members = new Map((activeLeagueData.memberUids || []).map(uid => [uid, { uid, username: "Member" }]));
         const memberUids = [...members.keys()];
         const roomSessionQueries = [];
         for (let i = 0; i < memberUids.length; i += 30) {
@@ -3205,21 +4803,34 @@ async function loadLeagueRanking() {
             getDocs(collection(db, "studySessions")),
             Promise.all(roomSessionQueries)
         ]);
-        sessionSnap.forEach(item => { const d = item.data(); const member = members.get(d.uid); if (member && d.status === "completed") { const seconds = Math.max(0, Number(d.durationSeconds) || 0); member.seconds += seconds; if (d.mode === "countdown") member.countdownSeconds += seconds; if (d.mode === "stopwatch") member.stopwatchSeconds += seconds; if (d.username) member.username = d.username; } });
-        roomSessionSnaps.forEach(snapshot => snapshot.forEach(item => {
+        const roomDocs = roomSessionSnaps.flatMap(snapshot => snapshot.docs);
+        const records = normalizeStudyRecords(sessionSnap.docs, roomDocs);
+        sessionSnap.forEach(item => {
             const data = item.data();
             const member = members.get(data.uid);
-            if (!member) return;
-            const seconds = Math.max(0, Number(data.durationSeconds) || 0);
-            member.seconds += seconds;
-            member.studySessionSeconds += seconds;
-        }));
+            if (member && data.username) member.username = data.username;
+        });
         const profiles = await Promise.all([...members.keys()].map(uid => getDoc(doc(db, "publicProfiles", uid))));
         const ownerUids = new Set();
-        profiles.forEach(p => { if (p.exists() && members.has(p.id)) { members.get(p.id).username = p.data().username || members.get(p.id).username; if (p.data().isOwner === true) ownerUids.add(p.id); } });
-        const ranked = [...members.values()].sort((a,b) => b.seconds-a.seconds);
+        const profileDataByUid = new Map();
+        profiles.forEach(p => {
+            if (!p.exists() || !members.has(p.id)) return;
+            profileDataByUid.set(p.id, p.data());
+            members.get(p.id).username = p.data().username || members.get(p.id).username;
+            if (p.data().isOwner === true) ownerUids.add(p.id);
+        });
+        const recordsByUser = new Map();
+        records.forEach(record => {
+            if (!members.has(record.uid)) return;
+            if (!recordsByUser.has(record.uid)) recordsByUser.set(record.uid, []);
+            recordsByUser.get(record.uid).push(record);
+        });
+        members.forEach(member => {
+            member.stats = calculateStudyStatistics(recordsByUser.get(member.uid) || [], profileDataByUid.get(member.uid)?.studyTimeZone || "UTC");
+        });
+        const ranked = [...members.values()].sort((a,b) => b.stats.totalSeconds-a.stats.totalSeconds || a.username.localeCompare(b.username));
         list.replaceChildren();
-        ranked.forEach((member, i) => { const row = document.createElement("div"); row.className = "friend-list-row"; const name = document.createElement("strong"); name.textContent = `${i+1}. ${member.username}${member.uid === auth.currentUser.uid ? " (YOU)" : ""}`; if (ownerUids.has(member.uid)) appendOwnerTag(name, "👑 OWNER"); const time = document.createElement("small"); time.textContent = `${formatChallengeTime(member.seconds)}  |  ⏳ ${formatChallengeTime(member.countdownSeconds)}  |  ⏱ ${formatChallengeTime(member.stopwatchSeconds)}  |  📚 ${formatChallengeTime(member.studySessionSeconds)}`; time.title = "Total study time | Countdown | Stopwatch | Study Session"; row.append(name,time); list.append(row); });
+        ranked.forEach((member, i) => { const row = document.createElement("div"); row.className = "friend-list-row"; const name = document.createElement("strong"); name.textContent = `${i+1}. ${member.username}${member.uid === auth.currentUser.uid ? " (YOU)" : ""}`; if (ownerUids.has(member.uid)) appendOwnerTag(name, "👑 OWNER"); const time = document.createElement("small"); time.textContent = `${formatStudyDuration(member.stats.totalSeconds)} total · ${member.stats.completedSessions} sessions · ${member.stats.studyDays} study days`; time.title = "Total study time from completed timer and shared sessions"; row.append(name,time); list.append(row); });
     } catch (error) { console.error(error); list.textContent = `Could not calculate ranking (${error.code || error.message}).`; }
 }
 
@@ -3306,10 +4917,20 @@ onAuthStateChanged(auth, async user => {
             countdownInterval = null;
         }
         stopTimerTicker();
+        stopPrayerReminderSystem();
+        activeSession = null;
         currentProfile = null;
-        if (studyRoomUnsubscribe) studyRoomUnsubscribe(); if (studyInviteUnsubscribe) studyInviteUnsubscribe(); if (activeStudyRoomUnsubscribe) activeStudyRoomUnsubscribe(); if (activeStudyRoomRemovalUnsubscribe) activeStudyRoomRemovalUnsubscribe(); if (studyRoomStatsUnsubscribe) studyRoomStatsUnsubscribe();
-        studyRoomUnsubscribe = studyInviteUnsubscribe = activeStudyRoomUnsubscribe = studyRoomStatsUnsubscribe = null; activeStudyRoomId = null; activeStudyRoomData = null;
+        if (studyRoomUnsubscribe) studyRoomUnsubscribe(); if (studyInviteUnsubscribe) studyInviteUnsubscribe(); if (activeStudyRoomUnsubscribe) activeStudyRoomUnsubscribe(); if (activeStudyRoomRemovalUnsubscribe) activeStudyRoomRemovalUnsubscribe(); if (studyRoomStatsUnsubscribe) studyRoomStatsUnsubscribe(); if (studySessionStatsUnsubscribe) studySessionStatsUnsubscribe();
+        studyRoomUnsubscribe = studyInviteUnsubscribe = activeStudyRoomUnsubscribe = studyRoomStatsUnsubscribe = studySessionStatsUnsubscribe = null; activeStudyRoomId = null; activeStudyRoomData = null;
         activeStudyRoomRemovalUnsubscribe = null;
+        stopStudyLeaderboardUpdates();
+        stopFriendStudyStats();
+        if (studyStatsDayInterval) clearInterval(studyStatsDayInterval);
+        studyStatsDayInterval = null;
+        studyStatsDayUid = null;
+        studyStatsCurrentDay = null;
+        if (studyStatsRefreshTimer) clearTimeout(studyStatsRefreshTimer);
+        studyStatsRefreshTimer = null;
         if (studyRoomTicker) clearInterval(studyRoomTicker); studyRoomTicker = null;
         studyRoomActionPending = false; endingStudyRoom = false;
     }

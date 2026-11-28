@@ -3,6 +3,24 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
     function owner(userId) { return signedIn() && request.auth.uid == userId; }
+    function validReligion(value) { return value in ['muslim', 'christian']; }
+    function validPrayerSettings(value) {
+      return value is map
+        && value.keys().hasOnly(['city','country','enabled'])
+        && value.keys().hasAll(['city','country','enabled'])
+        && value.city is string && value.city.size() > 0 && value.city.size() <= 80
+        && value.country is string && value.country.size() > 0 && value.country.size() <= 80
+        && value.enabled is bool;
+    }
+    function validPrayerReminder(reminderId, reminder) {
+      return reminderId.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+        && reminder.keys().hasOnly(['title','time','enabled','updatedAt'])
+        && reminder.keys().hasAll(['title','time','enabled','updatedAt'])
+        && reminder.title is string && reminder.title.size() > 0 && reminder.title.size() <= 80
+        && reminder.time == reminderId
+        && reminder.enabled is bool
+        && reminder.updatedAt == request.time;
+    }
     function leagueMember(leagueId) {
       return signedIn() && request.auth.uid in get(/databases/$(database)/documents/leagues/$(leagueId)).data.memberUids;
     }
@@ -36,23 +54,41 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow create: if owner(userId)
-        && request.resource.data.keys().hasOnly(['username','email','createdAt','xp','streak','status','avatarUrl','coverUrl','ownerSuggestionSeen','ownerSuggestionSeenAt'])
+        && request.resource.data.keys().hasOnly(['username','email','createdAt','xp','streak','status','avatarUrl','coverUrl','studyTimeZone','ownerSuggestionSeen','ownerSuggestionSeenAt','religion','prayerSettings'])
         && request.resource.data.username is string
         && request.resource.data.username.size() >= 3
         && request.resource.data.username.size() <= 20
         && request.resource.data.email == request.auth.token.email
+        && request.resource.data.xp is int && request.resource.data.xp == 0
+        && request.resource.data.streak is int && request.resource.data.streak == 0
+        && 'religion' in request.resource.data
+        && validReligion(request.resource.data.religion)
         && (!('avatarUrl' in request.resource.data) || request.resource.data.avatarUrl is string)
-        && (!('coverUrl' in request.resource.data) || (request.resource.data.coverUrl is string && request.resource.data.coverUrl.size() <= 2000));
+        && (!('coverUrl' in request.resource.data) || (request.resource.data.coverUrl is string && request.resource.data.coverUrl.size() <= 2000))
+        && (!('studyTimeZone' in request.resource.data) || (request.resource.data.studyTimeZone is string && request.resource.data.studyTimeZone.size() <= 64))
+        && (!('prayerSettings' in request.resource.data) || validPrayerSettings(request.resource.data.prayerSettings));
       allow read: if owner(userId);
       allow update: if owner(userId)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['username','avatarUrl','coverUrl','email','ownerSuggestionSeen','ownerSuggestionSeenAt'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['username','avatarUrl','coverUrl','email','studyTimeZone','ownerSuggestionSeen','ownerSuggestionSeenAt','religion','prayerSettings'])
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['username']) || (request.resource.data.username is string && request.resource.data.username.size() >= 3 && request.resource.data.username.size() <= 20))
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['avatarUrl']) || (request.resource.data.avatarUrl is string && request.resource.data.avatarUrl.size() <= 2000))
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['coverUrl']) || (request.resource.data.coverUrl is string && request.resource.data.coverUrl.size() <= 2000))
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['email']) || request.resource.data.email == request.auth.token.email)
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['studyTimeZone']) || (request.resource.data.studyTimeZone is string && request.resource.data.studyTimeZone.size() <= 64))
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerSuggestionSeen']) || request.resource.data.ownerSuggestionSeen is bool)
-        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerSuggestionSeenAt']) || request.resource.data.ownerSuggestionSeenAt == request.time);
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerSuggestionSeenAt']) || request.resource.data.ownerSuggestionSeenAt == request.time)
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['religion']) || validReligion(request.resource.data.religion))
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['prayerSettings']) || validPrayerSettings(request.resource.data.prayerSettings));
       allow delete: if false;
+
+      match /prayerReminders/{reminderId} {
+        allow read: if owner(userId);
+        allow create: if owner(userId) && validPrayerReminder(reminderId, request.resource.data);
+        allow update: if owner(userId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['title','time','enabled','updatedAt'])
+          && validPrayerReminder(reminderId, request.resource.data);
+        allow delete: if owner(userId);
+      }
 
       match /friendSettings/{friendUid} {
         allow read, delete: if owner(userId) && friendUid != userId;
@@ -89,12 +125,13 @@ service cloud.firestore {
     match /publicProfiles/{userId} {
       allow read: if signedIn();
       allow create, update: if owner(userId)
-        && request.resource.data.keys().hasOnly(['uid','username','usernameLower','avatarUrl','coverUrl','isOwner','updatedAt'])
+        && request.resource.data.keys().hasOnly(['uid','username','usernameLower','avatarUrl','coverUrl','studyTimeZone','isOwner','updatedAt'])
         && request.resource.data.keys().hasAll(['uid','username','usernameLower','avatarUrl','coverUrl','updatedAt'])
         && request.resource.data.uid == userId
         && request.resource.data.username is string && request.resource.data.username.size() >= 3 && request.resource.data.username.size() <= 20
         && request.resource.data.usernameLower is string
         && request.resource.data.avatarUrl is string && request.resource.data.avatarUrl.size() <= 2000
+        && (!('studyTimeZone' in request.resource.data) || (request.resource.data.studyTimeZone is string && request.resource.data.studyTimeZone.size() <= 64))
         && (!('isOwner' in request.resource.data) || request.resource.data.isOwner is bool)
         && request.resource.data.coverUrl is string && request.resource.data.coverUrl.size() <= 2000
         && request.resource.data.updatedAt == request.time;
@@ -140,6 +177,8 @@ service cloud.firestore {
         && request.resource.data.endedAt == request.time && request.resource.data.status == 'completed'
         && request.resource.data.durationSeconds is int && request.resource.data.durationSeconds >= 1 && request.resource.data.durationSeconds <= 604800
         && request.resource.data.pausedSeconds is int && request.resource.data.pausedSeconds >= 0 && request.resource.data.pausedSeconds <= 604800
+        && request.resource.data.pausedSeconds <= math.floor((request.time.toMillis() - resource.data.startedAt.toMillis()) / 1000)
+        && request.resource.data.durationSeconds + request.resource.data.pausedSeconds <= math.floor((request.time.toMillis() - resource.data.startedAt.toMillis()) / 1000)
         && request.resource.data.plannedSeconds is int && request.resource.data.plannedSeconds >= 0 && request.resource.data.plannedSeconds <= 86400
         && ((request.resource.data.mode == 'countdown' && request.resource.data.plannedSeconds >= 1) || (request.resource.data.mode == 'stopwatch' && request.resource.data.plannedSeconds == 0))
         && request.time > resource.data.startedAt;
