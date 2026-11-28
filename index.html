@@ -267,7 +267,12 @@
  </article>
  <article class="panel study-room-inbox"><div class="panel-heading"><div><span class="section-kicker">YOUR INBOX</span><h4>Study invitations</h4></div><span class="study-inbox-count" id="studyInviteCount">0</span></div><div id="studyInvitesList" class="friends-list"><p class="community-loading">Loading invitations...</p></div></article>
 </div>
-<article class="panel study-active-panel"><div class="panel-heading"><div><span class="section-kicker">LIVE COLLABORATION</span><h4>My study rooms</h4></div><span class="study-live-indicator"><i></i> LIVE SYNC</span></div><div id="myStudyRoomsList" class="study-rooms-list"><p class="community-loading">Loading your study rooms...</p></div></article>
+<article class="panel study-active-panel"><div class="panel-heading"><div><span class="section-kicker">LIVE COLLABORATION</span><h4>My study rooms</h4></div><span class="study-live-indicator"><i></i> LIVE SYNC</span></div><div class="study-room-tabs" role="tablist" aria-label="Study Session status">
+ <button type="button" class="study-room-tab active" data-room-filter="active">ACTIVE</button>
+ <button type="button" class="study-room-tab" data-room-filter="ended">ENDED</button>
+ <button type="button" class="study-room-tab" data-room-filter="invites">INVITES <span id="studyInviteTabCount">0</span></button>
+</div>
+<div id="myStudyRoomsList" class="study-rooms-list"><p class="community-loading">Loading your study rooms...</p></div></article>
 
 
 
