@@ -63,7 +63,8 @@ function getRoomElapsedSeconds(room, nowMillis) {
   let endedAt = nowMillis;
   if (room.pausedAt) endedAt = Math.min(endedAt, timestampMillis(room.pausedAt));
   if (room.mode === 'countdown') {
-    endedAt = Math.min(endedAt, startedAt + Math.max(0, Number(room.durationSeconds) || 0) * 1000);
+    const configuredEnd = timestampMillis(room.targetEndAt) || startedAt + Math.max(0, Number(room.durationSeconds) || 0) * 1000;
+    endedAt = Math.min(endedAt, configuredEnd);
   } else if (room.mode === 'until') {
     const targetEndAt = timestampMillis(room.targetEndAt);
     if (!targetEndAt) throw new HttpsError('failed-precondition', 'The session end time is invalid.');
