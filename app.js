@@ -3798,12 +3798,15 @@ function initStudySessionFilters() {
 function applyStudySessionFilter() {
     const roomRows = [...document.querySelectorAll("#myStudyRoomsList .study-room-row")];
     const inviteRows = [...document.querySelectorAll("#studyInvitesList .study-invite-row")];
+    const isNew = studySessionFilter === "new";
     roomRows.forEach(row => {
-        row.hidden = studySessionFilter === "invited" ||
+        row.hidden = isNew || studySessionFilter === "invited" ||
             (studySessionFilter === "active" && row.dataset.studyStatus !== "active") ||
             (studySessionFilter === "ended" && !["completed","cancelled"].includes(row.dataset.studyStatus));
     });
-    inviteRows.forEach(row => { row.hidden = studySessionFilter !== "all" && studySessionFilter !== "invited"; });
+    inviteRows.forEach(row => { row.hidden = isNew || (studySessionFilter !== "all" && studySessionFilter !== "invited"); });
+    const createPanel=document.getElementById("studyRoomCreatePanel"); if(createPanel)createPanel.hidden=!isNew;
+    const inboxPanel=document.querySelector(".study-room-inbox"); if(inboxPanel)inboxPanel.hidden=isNew;
     const counts = {
         all: roomRows.length + inviteRows.length,
         active: roomRows.filter(row => row.dataset.studyStatus === "active").length,
@@ -4250,6 +4253,8 @@ if(privateChatForm)privateChatForm.addEventListener("submit",async event=>{
     finally{studyRoomChatSending=false;button.disabled=false;}
 });
 const closeMemberModal=document.getElementById("studyMemberModalClose");
+const memberModalBackdrop=document.getElementById("studyMemberModalBackdrop");
+if(memberModalBackdrop)memberModalBackdrop.addEventListener("click",()=>closeMemberModal?.click());
 if(closeMemberModal)closeMemberModal.addEventListener("click",()=>{if(studyPrivateChatUnsubscribe)studyPrivateChatUnsubscribe();studyPrivateChatUnsubscribe=null;studyPrivateChatTargetUid=null;document.getElementById("studyMemberProfileModal").hidden=true;});
 const closePrivateChat=document.getElementById("studyPrivateChatBack");
 if(closePrivateChat)closePrivateChat.addEventListener("click",()=>{if(studyPrivateChatUnsubscribe)studyPrivateChatUnsubscribe();studyPrivateChatUnsubscribe=null;studyPrivateChatTargetUid=null;document.getElementById("studyPrivateChatPanel").hidden=true;});
