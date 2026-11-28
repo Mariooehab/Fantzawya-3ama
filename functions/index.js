@@ -60,7 +60,7 @@ function getRoomElapsedSeconds(room, nowMillis) {
   }
   const startedAt = timestampMillis(room.startedAt);
   if (!startedAt) throw new HttpsError('failed-precondition', 'The session start time is not available yet.');
-  let endedAt = nowMillis;
+  let endedAt = room.status === 'paused' ? timestampMillis(room.pausedAt) : nowMillis;
   if (room.mode === 'countdown') {
     endedAt = Math.min(endedAt, startedAt + Math.max(0, Number(room.durationSeconds) || 0) * 1000);
   } else if (room.mode === 'until') {
@@ -181,7 +181,7 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
 
     if (action === 'end') {
       if (room.ownerUid !== uid) throw new HttpsError('permission-denied', 'Only the host can end this session.');
-      if (room.status !== 'active') throw new HttpsError('failed-precondition', 'This session has already ended.');
+      if (!['active', 'paused'].includes(room.status)) throw new HttpsError('failed-precondition', 'This session has already ended.');
       const finalSeconds = getRoomElapsedSeconds(room, nowMillis);
       transaction.update(roomRef, { status: 'completed', endedAt: now, finalSeconds, autoEnded: request.data.autoEnded === true });
       return { status: 'completed', finalSeconds };
@@ -189,7 +189,7 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
 
     if (action === 'leave') {
       if (!members.includes(uid)) throw new HttpsError('failed-precondition', 'You are not a participant in this session.');
-      if (room.status === 'active' && !timestampMillis(room.startedAt)) {
+      if (['active', 'paused'].includes(room.status) && !timestampMillis(room.startedAt)) {
         throw new HttpsError('failed-precondition', 'The session start time is not available yet.');
       }
       const remainingMembers = members.filter(memberUid => memberUid !== uid);
@@ -215,7 +215,7 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
       if (isHost && nextHostUid) {
         updates.ownerUid = nextHostUid;
         updates.ownerUsername = profileSnapshot?.exists ? profileSnapshot.data().username || 'Member' : 'Member';
-      } else if (isHost && !remainingMembers.length && room.status === 'active') {
+      } else if (isHost && !remainingMembers.length && ['active', 'paused'].includes(room.status)) {
         updates.status = 'completed';
         updates.endedAt = now;
         updates.finalSeconds = getRoomElapsedSeconds(room, nowMillis);
@@ -256,7 +256,7 @@ exports.manageStudyRoom = onCall({ region: 'us-central1' }, async (request) => {
           targetUid === uid || !members.includes(targetUid)) {
         throw new HttpsError('invalid-argument', 'Choose another current participant to remove.');
       }
-      if (room.status === 'active' && !timestampMillis(room.startedAt)) {
+      if (['active', 'paused'].includes(room.status) && !timestampMillis(room.startedAt)) {
         throw new HttpsError('failed-precondition', 'The session start time is not available yet.');
       }
       const remainingMembers = members.filter(memberUid => memberUid !== targetUid);
